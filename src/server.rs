@@ -1,5 +1,3 @@
-#![allow(unused_imports)]
-
 use async_trait::async_trait;
 use futures::{future, Stream, StreamExt, TryFutureExt, TryStreamExt};
 use hyper::server::conn::Http;

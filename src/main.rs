@@ -1,4 +1,5 @@
 #![allow(missing_docs)]
+mod config;
 mod server;
 
 #[tokio::main]

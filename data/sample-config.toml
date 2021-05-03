@@ -1,0 +1,30 @@
+[general]
+data_path = "/data/repo/"
+timeout = 60
+debounce = 120
+auto_align = 3600
+
+[repo.centos8.source]
+endpoint = "https://"
+kind = "debian"
+username = "username"
+password = "password"
+
+[repo.centos8.destination]
+s3 = "s3://s3repo/prod"
+cdn_arn = "arn"
+access_key = "key"
+secret = "secret"
+
+[repo.ubuntu.source]
+endpoint = "https://"
+kind = "debian"
+username = "username"
+password = "password"
+
+[repo.ubuntu.destination]
+s3 = "s3://s3repo/prod"
+cdn_arn = "arn"
+access_key = "key"
+secret = "secret"
+
