@@ -1,0 +1,121 @@
+openapi: 3.0.2
+info:
+  description: Control synchronization of debian and redhat repositories
+  title: reposync
+  version: 1.0.0
+servers:
+- url: /
+paths:
+  /health:
+    get:
+      responses:
+        "204":
+          description: Empty response when everything is ok.
+        "503":
+          description: Service unavailable when service has known issues, such as
+            a full disk.
+      summary: simple health-check
+    summary: simple healthcheck
+  /repo/{repo}/:
+    get:
+      description: Return a full status of the repository.
+      parameters:
+      - description: Selected repository name.
+        examples:
+          centos8 production:
+            value: '"centos8-prod"'
+        explode: false
+        in: path
+        name: repo
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/status'
+          description: The status of the repository.
+        "404":
+          description: Repository not found.
+      summary: status of repository
+    summary: Read status for the selected repository.
+  /repo/{repo}/sync:
+    post:
+      description: Trigger an asynchronous synchronization for the repository.
+      parameters:
+      - description: Selected repository name.
+        examples:
+          centos8 production:
+            value: '"centos8-prod"'
+        explode: false
+        in: path
+        name: repo
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "201":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/status'
+          description: The synchronization has been queued correctly.
+        "404":
+          description: Repository not found.
+      summary: Perform a synchronization
+    summary: Queue a synchronization for the selected repository.
+components:
+  schemas:
+    status:
+      description: Status of a repository
+      example:
+        name: centos7
+        status: syncing
+        next_sync: 1620048884
+        last_sync: 1620045374
+        last_result: ok
+        size: 240873
+      properties:
+        name:
+          description: Name of the repository, also work as UID
+          type: string
+        status:
+          description: |-
+            The current status of the repository.
+            Syncing means it's currently syncing.
+            Waiting means it's waiting for the sync.
+          enum:
+          - syncing
+          - waiting
+          type: string
+        next_sync:
+          description: UTC timestamp for the next sync
+          format: int64
+          type: integer
+        last_sync:
+          description: UTC timestamp of last sync, 0 if never performed
+          format: int64
+          type: integer
+        last_result:
+          description: |-
+            Result of last sync, either "ok" or "failure: reason".
+            When a sync is never performed "ok" is returned.
+          type: string
+        size:
+          description: Current size of the repository, in bytes.
+          format: int64
+          type: integer
+      required:
+      - last_result
+      - last_sync
+      - name
+      - next_sync
+      - size
+      - status
+      title: Root Type for status
+      type: object
+
