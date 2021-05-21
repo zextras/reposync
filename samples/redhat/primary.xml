@@ -1,0 +1,90 @@
+<?xml version="1.0"?>
+<metadata xmlns="http://linux.duke.edu/metadata/common" xmlns:rpm="http://linux.duke.edu/metadata/rpm" packages="4">
+    <package type="rpm">
+        <name>service-discover-server</name>
+        <arch>x86_64</arch>
+        <version epoch="0" ver="0.1.0" rel="1.el7"/>
+        <checksum type="sha" pkgid="YES">d331abce6e2300fc3a6e6d8d04849a7c58d20c00</checksum>
+        <summary>Service discover server cli</summary>
+        <description>Service discover server cli</description>
+        <packager>zextras &lt;packages@zextras.com&gt;</packager>
+        <url>https://www.zextras.com/</url>
+        <time file="1613143933633" build="1613143913"/>
+        <size package="1089320" installed="3248292" archive="3248712"/>
+        <location href="zextras/service-discover-server/service-discover-server-0.1.0.x86_64.rpm"/>
+        <format>
+            <rpm:license>[PROPRIETARY]</rpm:license>
+            <rpm:group>Applications/System</rpm:group>
+            <rpm:buildhost>5a501a42f45b</rpm:buildhost>
+            <rpm:sourcerpm>service-discover-server-0.1.0-1.el7.src.rpm</rpm:sourcerpm>
+            <rpm:header-range start="280" end="2708"/>
+            <rpm:provides>
+                <rpm:entry name="service-discover"/>
+                <rpm:entry name="service-discover-server" flags="EQ" epoch="0" ver="0.1.0" rel="1.el7"/>
+                <rpm:entry name="service-discover-server(x86-64)" flags="EQ" epoch="0" ver="0.1.0" rel="1.el7"/>
+            </rpm:provides>
+            <rpm:requires>
+                <rpm:entry name="libc.so.6()(64bit)"/>
+                <rpm:entry name="libc.so.6(GLIBC_2.2.5)(64bit)"/>
+                <rpm:entry name="libpthread.so.0()(64bit)"/>
+                <rpm:entry name="libpthread.so.0(GLIBC_2.2.5)(64bit)"/>
+                <rpm:entry name="libpthread.so.0(GLIBC_2.3.2)(64bit)"/>
+                <rpm:entry name="rpmlib(CompressedFileNames)" flags="LE" epoch="0" ver="3.0.4" rel="1"/>
+                <rpm:entry name="rpmlib(FileDigests)" flags="LE" epoch="0" ver="4.6.0" rel="1"/>
+                <rpm:entry name="rpmlib(PayloadFilesHavePrefix)" flags="LE" epoch="0" ver="4.0" rel="1"/>
+                <rpm:entry name="service-discover-base"/>
+                <rpm:entry name="service-discover-daemon"/>
+                <rpm:entry name="rpmlib(PayloadIsXz)" flags="LE" epoch="0" ver="5.2" rel="1"/>
+            </rpm:requires>
+            <rpm:conflicts>
+                <rpm:entry name="service-discover-agent"/>
+            </rpm:conflicts>
+            <rpm:obsoletes/>
+            <file>/usr/bin/service-discover</file>
+        </format>
+    </package>
+    <package type="rpm">
+        <name>service-discover-daemon</name>
+        <arch>x86_64</arch>
+        <version epoch="0" ver="0.1.0" rel="1.el7"/>
+        <checksum type="sha" pkgid="YES">46530a9bd48e887301d3de5fbdb7634b9c2ac299</checksum>
+        <summary>Service discover daemon</summary>
+        <description>Service discover binary daemon</description>
+        <packager>zextras &lt;packages@zextras.com&gt;</packager>
+        <url>https://www.zextras.com/</url>
+        <time file="1613057547780" build="1613057537"/>
+        <size package="1469912" installed="4783114" archive="4783676"/>
+        <location href="zextras/service-discover-daemon/service-discover-daemon-0.1.0.x86_64.rpm"/>
+        <format>
+            <rpm:license>[PROPRIETARY]</rpm:license>
+            <rpm:group>Applications/System</rpm:group>
+            <rpm:buildhost>1f68eb4d1b02</rpm:buildhost>
+            <rpm:sourcerpm>service-discover-daemon-0.1.0-1.el7.src.rpm</rpm:sourcerpm>
+            <rpm:header-range start="280" end="2944"/>
+            <rpm:provides>
+                <rpm:entry name="service-discover-daemon" flags="EQ" epoch="0" ver="0.1.0" rel="1.el7"/>
+                <rpm:entry name="service-discover-daemon(x86-64)" flags="EQ" epoch="0" ver="0.1.0" rel="1.el7"/>
+            </rpm:provides>
+            <rpm:requires>
+                <rpm:entry name="libc.so.6()(64bit)"/>
+                <rpm:entry name="libc.so.6(GLIBC_2.2.5)(64bit)"/>
+                <rpm:entry name="libc.so.6(GLIBC_2.3.4)(64bit)"/>
+                <rpm:entry name="libc.so.6(GLIBC_2.4)(64bit)"/>
+                <rpm:entry name="libpthread.so.0()(64bit)"/>
+                <rpm:entry name="libpthread.so.0(GLIBC_2.2.5)(64bit)"/>
+                <rpm:entry name="libpthread.so.0(GLIBC_2.3.2)(64bit)"/>
+                <rpm:entry name="rpmlib(CompressedFileNames)" flags="LE" epoch="0" ver="3.0.4" rel="1"/>
+                <rpm:entry name="rpmlib(FileDigests)" flags="LE" epoch="0" ver="4.6.0" rel="1"/>
+                <rpm:entry name="rpmlib(PayloadFilesHavePrefix)" flags="LE" epoch="0" ver="4.0" rel="1"/>
+                <rpm:entry name="service-discover-base"/>
+                <rpm:entry name="rpmlib(PayloadIsXz)" flags="LE" epoch="0" ver="5.2" rel="1"/>
+            </rpm:requires>
+            <rpm:conflicts>
+                <rpm:entry name="consul"/>
+            </rpm:conflicts>
+            <rpm:obsoletes/>
+            <file>/usr/bin/service-discover</file>
+            <file>/usr/bin/service-discoverd</file>
+        </format>
+    </package>
+</metadata>

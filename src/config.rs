@@ -1,42 +1,45 @@
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fs;
-use toml::de::Error;
 
 #[derive(Serialize, Deserialize)]
-pub struct Source {
-    endpoint: String,
-    kind: String,
-    username: String,
-    password: String,
+pub struct SourceConfig {
+    pub endpoint: String,
+    pub kind: String,
+    pub username: String,
+    pub password: String,
 }
 
 #[derive(Serialize, Deserialize)]
-pub struct Destination {
-    s3: String,
-    cdn_arn: String,
-    access_key: String,
-    secret: String,
+pub struct DestinationConfig {
+    pub s3: String,
+    pub cdn_arn: String,
+    pub access_key: String,
+    pub secret: String,
 }
 
 #[derive(Serialize, Deserialize)]
-pub struct Repository {
-    source: Source,
-    destination: Destination,
+pub struct RepositoryConfig {
+    pub name: String,
+    pub source: SourceConfig,
+    pub destination: DestinationConfig,
+    #[serde(default)]
+    pub versions: Vec<String>,
 }
 
 #[derive(Serialize, Deserialize)]
-struct General {
-    data_path: String,
-    timeout: u32,
-    debounce: u32,
-    auto_align: u32,
+pub struct GeneralConfig {
+    pub data_path: String,
+    pub tmp_path: String,
+    pub timeout: u32,
+    pub debounce: u32,
+    pub auto_align: u32,
 }
 
 #[derive(Serialize, Deserialize)]
 pub struct Config {
-    general: General,
-    repo: BTreeMap<String, Repository>,
+    pub general: GeneralConfig,
+    pub repo: Vec<RepositoryConfig>,
 }
 
 pub fn load_config(path: &str) -> Result<Config, String> {
@@ -45,9 +48,9 @@ pub fn load_config(path: &str) -> Result<Config, String> {
         return Result::Err(format!("Cannot read file {}", path));
     }
 
-    let config = toml::from_str(&text.unwrap());
+    let config = serde_yaml::from_str(&text.unwrap());
     if config.is_err() {
-        return Result::Err(format!("Cannot parse toml file"));
+        return Result::Err(format!("Cannot parse config file"));
     }
 
     Result::Ok(config.unwrap())
@@ -60,10 +63,13 @@ pub mod tests {
 
     #[test]
     fn load_sample_config() {
-        let config = load_config("data/sample-config.toml").expect("cannot config sample");
+        let config = load_config("samples/config.yaml").expect("cannot config sample");
         assert_eq!("/data/repo/", config.general.data_path);
-        assert!(config.repo.contains_key("centos8"));
-        assert!(config.repo.contains_key("ubuntu"));
-        toml::to_string(&config).expect("cannot convert back to toml");
+        assert_eq!(2, config.repo.len());
+        let repo0 = config.repo.get(0).unwrap();
+        assert_eq!("centos8", repo0.name);
+        let repo1 = config.repo.get(1).unwrap();
+        assert_eq!("ubuntu", repo1.name);
+        serde_yaml::to_string(&config).expect("cannot convert back to toml");
     }
 }

@@ -1,0 +1,29 @@
+Origin: Artifactory
+Label: Artifactory
+Suite: bionic
+Codename: bionic
+Date: Wed, 12 May 2021 12:56:37 UTC
+Acquire-By-Hash: yes
+Components: main
+Architectures: amd64 i386
+MD5Sum:
+ c911641b560bdded813c059bac5f4db1             2624 main/binary-amd64/Packages
+ 2ba3fcc24a8899d45325887fa6b34e5d              964 main/binary-amd64/Packages.bz2
+ 993f8f1959f2ce13b9a548fbbe9e0387              836 main/binary-amd64/Packages.gz
+ d41d8cd98f00b204e9800998ecf8427e                0 main/binary-i386/Packages
+ 4059d198768f9f8dc9372dc1c54bc3c3               14 main/binary-i386/Packages.bz2
+ 3970e82605c7d109bb348fc94e9eecc0               20 main/binary-i386/Packages.gz
+SHA1:
+ ba777be83e96886ad134d27192f88f65411f59f8             2624 main/binary-amd64/Packages
+ 415685964f32224a065cdb07ee1a0be39bf417d0              964 main/binary-amd64/Packages.bz2
+ 79ddcd321025fde090c01c5a5cbe051b5e8c1d80              836 main/binary-amd64/Packages.gz
+ da39a3ee5e6b4b0d3255bfef95601890afd80709                0 main/binary-i386/Packages
+ 64a543afbb5f4bf728636bdcbbe7a2ed0804adc2               14 main/binary-i386/Packages.bz2
+ e03849ea786b9f7b28a35c17949e85a93eb1cff1               20 main/binary-i386/Packages.gz
+SHA256:
+ 6db5a7a47b02f04f3bbaf39fbdc8e5599c55a082f55270a45ff1a57a43a398a5             1085 main/binary-amd64/Packages
+ 6db5a7a47b02f04f3bbaf39fbdc8e5599c55a082f55270a45ff1a57a43a398a5             1085 main/binary-amd64/Packages.bz2
+ 6db5a7a47b02f04f3bbaf39fbdc8e5599c55a082f55270a45ff1a57a43a398a5             1085 main/binary-amd64/Packages.gz
+ 6db5a7a47b02f04f3bbaf39fbdc8e5599c55a082f55270a45ff1a57a43a398a5             1085 main/binary-i386/Packages
+ 6db5a7a47b02f04f3bbaf39fbdc8e5599c55a082f55270a45ff1a57a43a398a5             1085 main/binary-i386/Packages.bz2
+ 6db5a7a47b02f04f3bbaf39fbdc8e5599c55a082f55270a45ff1a57a43a398a5             1085 main/binary-i386/Packages.gz

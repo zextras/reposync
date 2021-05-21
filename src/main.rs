@@ -1,6 +1,12 @@
 #![allow(missing_docs)]
 mod config;
+mod debian;
+mod fetcher;
+mod packages;
+mod redhat;
 mod server;
+mod state;
+mod sync;
 
 #[tokio::main]
 async fn main() {

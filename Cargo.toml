@@ -10,12 +10,15 @@ async-trait = "0.1.24"
 chrono = { version = "0.4", features = ["serde"] }
 futures = "0.3"
 swagger = "5.0.2"
+reqwest = { version = "0.11", features = ["json","blocking"] }
+data-encoding = "2.3"
 log = "0.4.0"
 mime = "0.3"
 serde = { version = "1.0", features = ["derive"] }
-toml = "0.5"
 serde_json = "1.0"
+serde_yaml = "0.8"
 hyper = {version = "0.13", optional = false}
+xml-rs = "0.8"
 serde_ignored = {version = "0.1.1", optional = false}
 url = {version = "2.1", optional = false}
 lazy_static = { version = "1.4", optional = false }
@@ -28,3 +31,9 @@ frunk-enum-derive = { version = "0.2.0", optional = false }
 frunk-enum-core = { version = "0.2.0", optional = false }
 env_logger = "0.7"
 tokio = { version = "0.2", features = ["rt-threaded", "macros", "stream"] }
+tempfile = "3.2"
+sha-1 = "0.9"
+sha2 = "0.9"
+
+[dev-dependencies]
+mockall = "0.9"

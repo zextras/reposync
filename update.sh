@@ -1,4 +1,3 @@
-
 #!/bin/bash
 
 # this scripts update the project to reflect changes in the openapi specs
