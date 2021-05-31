@@ -31,9 +31,16 @@ frunk-enum-derive = { version = "0.2.0", optional = false }
 frunk-enum-core = { version = "0.2.0", optional = false }
 env_logger = "0.7"
 tokio = { version = "0.2", features = ["rt-threaded", "macros", "stream"] }
+clap = "2.33"
+bytes = "0.5.6"
 tempfile = "3.2"
 sha-1 = "0.9"
 sha2 = "0.9"
+rusoto_cloudfront = "0.45"
+rusoto_s3 = "0.45"
+rusoto_core = "0.45"
+flate2 = "1.0"
+pgp = "0.7.1"
 
 [dev-dependencies]
 mockall = "0.9"

@@ -16,11 +16,13 @@ use swagger::ApiError;
 use swagger::EmptyContext;
 use swagger::{Has, XSpanIdString};
 
+use crate::config::Config;
+use crate::sync::SyncManager;
 use reposync_lib::models;
 
-pub async fn create(addr: &str) {
+pub async fn create(sync_manager: SyncManager, addr: &str) {
     let addr = addr.parse().expect("Failed to parse bind address");
-    let server = Server::new();
+    let server = Server::new(sync_manager);
     let service = MakeService::new(server);
     let service = MakeAllowAllAuthenticator::new(service, "cosmo");
     let service = reposync_lib::server::context::MakeAddContext::<_, EmptyContext>::new(service);
@@ -31,15 +33,17 @@ pub async fn create(addr: &str) {
         .unwrap()
 }
 
-#[derive(Copy, Clone)]
+#[derive(Clone)]
 pub struct Server<C> {
     marker: PhantomData<C>,
+    sync_manager: Arc<SyncManager>,
 }
 
 impl<C> Server<C> {
-    pub fn new() -> Self {
+    pub fn new(sync_manager: SyncManager) -> Self {
         Server {
             marker: PhantomData,
+            sync_manager: Arc::new(sync_manager),
         }
     }
 }
@@ -62,6 +66,7 @@ where
         repo: String,
         context: &C,
     ) -> Result<RepoRepoGetResponse, ApiError> {
+        // self.sync_manager.load_current(&self.config, )
         let context = context.clone();
         info!(
             "repo_repo_get(\"{}\") - X-Span-ID: {:?}",

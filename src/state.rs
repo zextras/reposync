@@ -85,13 +85,17 @@ impl RepoMetadataStore for LiveRepoMetadataStore {
                     format!("file not found '{}'", path),
                 ));
             }
-            return Err(std::io::Error::new(ErrorKind::Other, err.error));
+            return Err(std::io::Error::new(
+                ErrorKind::Other,
+                format!("cannot open file '{}': {}", path, err.error),
+            ));
         }
 
         let mut reader = fetch_result.unwrap();
         let mut output = File::create(&file_path)?;
         let size = std::io::copy(&mut reader, &mut output)?;
-        let file_reader = Box::new(File::open(&file_path)?);
+        let file_reader =
+            Box::new(File::open(&file_path).expect("cannot open a just created file"));
 
         Ok((file_path, file_reader, size))
     }

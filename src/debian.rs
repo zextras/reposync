@@ -1,14 +1,9 @@
-/*
-https://zextras.jfrog.io/artifactory/ubuntu-playground/dists/bionic/Release
-repo/dists/{dist}/Release
-repo/dists/{dist}/Release.pgp
-repo/dists/{dist}/InRelease
-*/
-
 use crate::config::{RepositoryConfig, SourceConfig};
-use crate::fetcher::{create_chain, Fetcher};
-use crate::packages::{Collection, Hash, IndexFile, Package, Repository, Target};
+use crate::fetcher::Fetcher;
+use crate::packages::Signature::{PGPEmbedded, PGPExternal};
+use crate::packages::{Collection, Hash, IndexFile, Package, Repository, Signature, Target};
 use crate::state::{LiveRepoMetadataStore, RepoMetadataStore, SavedRepoMetadataStore};
+use crate::utils::add_optional_index;
 use data_encoding::BASE32_NOPAD;
 use regex::Regex;
 use std::collections::BTreeMap;
@@ -39,8 +34,14 @@ pub fn fetch_repository(
     config: &RepositoryConfig,
 ) -> Result<(Repository, LiveRepoMetadataStore), std::io::Error> {
     let repo_metadata = LiveRepoMetadataStore::new(&config.source.endpoint, tmp_path, fetcher);
-    let repository = fetch_repository_internal(&repo_metadata, config)?;
-    Ok((repository, repo_metadata))
+    let result = fetch_repository_internal(&repo_metadata, config, false);
+    if let Err(err) = result {
+        return Err(std::io::Error::new(
+            err.kind(),
+            format!("cannot fetch repo state: {}", &err.to_string()),
+        ));
+    }
+    Ok((result.unwrap(), repo_metadata))
 }
 
 pub fn load_repository(
@@ -48,15 +49,22 @@ pub fn load_repository(
     config: &RepositoryConfig,
 ) -> Result<(Repository, SavedRepoMetadataStore), std::io::Error> {
     let repo_metadata = SavedRepoMetadataStore::new(data_path);
-    let repository = fetch_repository_internal(&repo_metadata, config)?;
+    let result = fetch_repository_internal(&repo_metadata, config, true);
+    if let Err(err) = result {
+        return Err(std::io::Error::new(
+            err.kind(),
+            format!("cannot load current repo state: {}", &err.to_string()),
+        ));
+    }
 
-    Ok((repository, repo_metadata))
+    Ok((result.unwrap(), repo_metadata))
 }
 
 //internal function for dependency injection
 fn fetch_repository_internal<T>(
     state: &T,
     config: &RepositoryConfig,
+    allow_empty: bool,
 ) -> Result<Repository, std::io::Error>
 where
     T: RepoMetadataStore,
@@ -67,45 +75,90 @@ where
     };
 
     for version_codename in &config.versions {
-        let path = format!("dists/{}/Release", version_codename);
-        let (disk_path, reader, size) = state.fetch(&path)?;
-        let mut release = parse_release(reader)?;
+        let version_path = format!("dists/{}", version_codename);
+        let path = format!("{}/Release", &version_path);
+        let result = state.fetch(&path);
+        if allow_empty {
+            if let Err(err) = result {
+                //mostly useful when adding a new distribution
+                if err.kind() == ErrorKind::NotFound {
+                    continue;
+                } else {
+                    return Err(err);
+                }
+            }
+        } else {
+            if result.is_err() {
+                return Err(result.err().unwrap());
+            }
+        }
+        let (disk_path, reader, size) = result.unwrap();
+        let mut release = parse_release(reader, &version_path)?;
 
-        /*
-        also check for:
-          - InRelease (signed)
-          - Release.pgp (signature)
-        */
+        let mut indexes: Vec<IndexFile> = vec![];
+
+        //this index file is optional
+        add_optional_index(
+            state,
+            &format!("{}/InRelease", version_path),
+            &mut indexes,
+            Signature::PGPEmbedded,
+        )?;
+        let signature = add_optional_index(
+            state,
+            &format!("{}/Release.gpg", version_path),
+            &mut indexes,
+            Signature::None,
+        )?;
+
+        if signature.is_some() {
+            let mut text_signature = String::new();
+            signature.unwrap().read_to_string(&mut text_signature)?;
+            indexes.insert(
+                0,
+                IndexFile {
+                    file_path: disk_path,
+                    path,
+                    size,
+                    hash: Hash::None,
+                    signature: Signature::PGPExternal {
+                        signature: text_signature,
+                    },
+                },
+            );
+        } else {
+            indexes.insert(
+                0,
+                IndexFile {
+                    file_path: disk_path,
+                    path,
+                    size,
+                    hash: Hash::None,
+                    signature: Signature::None,
+                },
+            );
+        }
 
         let mut packages: Vec<Package> = Vec::new();
 
         for index in &mut release.indexes {
+            let (disk_path, reader, size) = state.fetch(&index.path)?;
+            index.file_path = disk_path;
+            if index.size != size {
+                return Err(std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    format!(
+                        "wrong file size for '{}', expected: {} found {}",
+                        index.path, index.size, size
+                    ),
+                ));
+            }
             if index.path.ends_with("Packages") {
-                let (disk_path, reader, size) = state.fetch(&index.path)?;
-                index.file_path = disk_path;
-                if index.size != size {
-                    return Err(std::io::Error::new(
-                        ErrorKind::InvalidData,
-                        format!(
-                            "wrong file size for '{}', expected: {} found {}",
-                            index.path, index.size, size
-                        ),
-                    ));
-                }
                 packages.append(&mut parse_packages(reader)?);
             }
         }
 
-        let mut indexes = release.indexes.clone();
-        indexes.insert(
-            0,
-            IndexFile {
-                file_path: disk_path,
-                path: path,
-                size,
-                hash: Hash::None,
-            },
-        );
+        indexes.append(&mut release.indexes);
 
         repo.collections.push(Collection {
             target: Target {
@@ -120,7 +173,7 @@ where
     Ok(repo)
 }
 
-pub fn parse_release<R>(input_read: R) -> Result<Release, std::io::Error>
+pub fn parse_release<R>(input_read: R, base_path: &str) -> Result<Release, std::io::Error>
 where
     R: Read,
 {
@@ -159,11 +212,12 @@ where
                         }
                         release.indexes.push(IndexFile {
                             file_path: "".into(),
-                            path: group.get(3).unwrap().as_str().to_string(),
+                            path: format!("{}/{}", base_path, group.get(3).unwrap().as_str()),
                             size: size.unwrap(),
                             hash: Hash::Sha256 {
                                 hex: group.get(1).unwrap().as_str().to_string(),
                             },
+                            signature: Signature::None,
                         })
                     } else {
                         return Result::Err(std::io::Error::new(
@@ -302,8 +356,8 @@ pub mod tests {
         fetch_repository, fetch_repository_internal, parse_packages, parse_release,
         LiveRepoMetadataStore, Package, PackagesReference,
     };
-    use crate::fetcher::{DiskCacheFetcher, Fetcher, MockFetcher};
-    use crate::packages::{Hash, IndexFile};
+    use crate::fetcher::{Fetcher, MockFetcher};
+    use crate::packages::{Hash, IndexFile, Signature};
     use crate::state::RepoMetadataStore;
     use mockall::predicate;
     use std::fs;
@@ -315,15 +369,33 @@ pub mod tests {
     fn fetch_repository_state() {
         let mut mock_fetcher = MockFetcher::new();
 
-        mock_fetcher.expect_fetch().times(3).returning(|url: &str| {
+        mock_fetcher.expect_fetch().times(9).returning(|url: &str| {
             Result::Ok(Box::new(match url {
                 "http://fake-url/rc/dists/focal/Release" => {
                     File::open("samples/debian/Release").unwrap()
                 }
-                "http://fake-url/rc/main/binary-amd64/Packages" => {
+                "http://fake-url/rc/dists/focal/Release.gpg" => {
+                    File::open("samples/fake-signature").unwrap()
+                }
+                "http://fake-url/rc/dists/focal/InRelease" => {
+                    File::open("samples/debian/Release").unwrap()
+                }
+                "http://fake-url/rc/dists/focal/main/binary-amd64/Packages" => {
                     File::open("samples/debian/Packages").unwrap()
                 }
-                "http://fake-url/rc/main/binary-i386/Packages" => {
+                "http://fake-url/rc/dists/focal/main/binary-amd64/Packages.bz2" => {
+                    File::open("samples/debian/Packages").unwrap()
+                }
+                "http://fake-url/rc/dists/focal/main/binary-amd64/Packages.gz" => {
+                    File::open("samples/debian/Packages").unwrap()
+                }
+                "http://fake-url/rc/dists/focal/main/binary-i386/Packages" => {
+                    File::open("samples/debian/Packages").unwrap()
+                }
+                "http://fake-url/rc/dists/focal/main/binary-i386/Packages.bz2" => {
+                    File::open("samples/debian/Packages").unwrap()
+                }
+                "http://fake-url/rc/dists/focal/main/binary-i386/Packages.gz" => {
                     File::open("samples/debian/Packages").unwrap()
                 }
                 _ => panic!("unexpected url: {}", url),
@@ -345,17 +417,23 @@ pub mod tests {
                 source: SourceConfig {
                     endpoint: "http://fake-url".to_string(),
                     kind: "".to_string(),
-                    username: "".to_string(),
-                    password: "".to_string(),
+                    public_pgp_key: None,
+                    username: None,
+                    password: None,
                 },
                 destination: DestinationConfig {
-                    s3: "".to_string(),
-                    cdn_arn: "".to_string(),
-                    access_key: "".to_string(),
-                    secret: "".to_string(),
+                    s3_endpoint: "".to_string(),
+                    cloudfront_endpoint: None,
+                    s3_bucket: "".to_string(),
+                    cloudfront_arn: None,
+                    region_name: "".to_string(),
+                    access_key_id: "".to_string(),
+                    access_key_secret: "".to_string(),
+                    path: "".to_string(),
                 },
                 versions: vec!["focal".into()],
             },
+            false,
         )
         .unwrap();
 
@@ -366,7 +444,7 @@ pub mod tests {
         assert_eq!(vec!["amd64", "i386"], collection0.target.architectures);
         assert_eq!("focal", collection0.target.release_name);
         assert_eq!(4, collection0.packages.len());
-        assert_eq!(7, collection0.indexes.len());
+        assert_eq!(9, collection0.indexes.len());
 
         let mut text = String::new();
         state
@@ -382,7 +460,7 @@ pub mod tests {
     #[test]
     fn load_sample_release() {
         let reader = File::open("samples/debian/Release").unwrap();
-        let release = parse_release(&reader).unwrap();
+        let release = parse_release(&reader, "dists/fake-distro").unwrap();
         assert_eq!("bionic", release.codename);
         assert_eq!(vec!["main"], release.components);
         assert_eq!(vec!["amd64", "i386"], release.architectures);
@@ -390,57 +468,63 @@ pub mod tests {
             vec![
                 IndexFile {
                     file_path: String::new(),
-                    path: "main/binary-amd64/Packages".to_string(),
+                    path: "dists/fake-distro/main/binary-amd64/Packages".to_string(),
                     size: 1085,
                     hash: Hash::Sha256 {
                         hex: "6db5a7a47b02f04f3bbaf39fbdc8e5599c55a082f55270a45ff1a57a43a398a5"
                             .into()
-                    }
+                    },
+                    signature: Signature::None,
                 },
                 IndexFile {
                     file_path: String::new(),
-                    path: "main/binary-amd64/Packages.bz2".to_string(),
+                    path: "dists/fake-distro/main/binary-amd64/Packages.bz2".to_string(),
                     size: 1085,
                     hash: Hash::Sha256 {
                         hex: "6db5a7a47b02f04f3bbaf39fbdc8e5599c55a082f55270a45ff1a57a43a398a5"
                             .into()
-                    }
+                    },
+                    signature: Signature::None,
                 },
                 IndexFile {
                     file_path: String::new(),
-                    path: "main/binary-amd64/Packages.gz".to_string(),
+                    path: "dists/fake-distro/main/binary-amd64/Packages.gz".to_string(),
                     size: 1085,
                     hash: Hash::Sha256 {
                         hex: "6db5a7a47b02f04f3bbaf39fbdc8e5599c55a082f55270a45ff1a57a43a398a5"
                             .into()
-                    }
+                    },
+                    signature: Signature::None,
                 },
                 IndexFile {
                     file_path: String::new(),
-                    path: "main/binary-i386/Packages".to_string(),
+                    path: "dists/fake-distro/main/binary-i386/Packages".to_string(),
                     size: 1085,
                     hash: Hash::Sha256 {
                         hex: "6db5a7a47b02f04f3bbaf39fbdc8e5599c55a082f55270a45ff1a57a43a398a5"
                             .into()
-                    }
+                    },
+                    signature: Signature::None,
                 },
                 IndexFile {
                     file_path: String::new(),
-                    path: "main/binary-i386/Packages.bz2".to_string(),
+                    path: "dists/fake-distro/main/binary-i386/Packages.bz2".to_string(),
                     size: 1085,
                     hash: Hash::Sha256 {
                         hex: "6db5a7a47b02f04f3bbaf39fbdc8e5599c55a082f55270a45ff1a57a43a398a5"
                             .into()
-                    }
+                    },
+                    signature: Signature::None,
                 },
                 IndexFile {
                     file_path: String::new(),
-                    path: "main/binary-i386/Packages.gz".to_string(),
+                    path: "dists/fake-distro/main/binary-i386/Packages.gz".to_string(),
                     size: 1085,
                     hash: Hash::Sha256 {
                         hex: "6db5a7a47b02f04f3bbaf39fbdc8e5599c55a082f55270a45ff1a57a43a398a5"
                             .into()
-                    }
+                    },
+                    signature: Signature::None,
                 }
             ],
             release.indexes

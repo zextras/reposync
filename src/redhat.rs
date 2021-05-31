@@ -17,11 +17,163 @@ repomd.xml Contains information regarding all the other metadata files.
 2e1eb1fb69a2ca7fbd6d8723ce7d3cd91e9a9f13-primary.xml.gz:
 */
 
-use crate::packages::{Hash, Package};
+use crate::config::RepositoryConfig;
+use crate::fetcher::Fetcher;
+use crate::packages::{Collection, Hash, IndexFile, Package, Repository, Signature, Target};
+use crate::state::{LiveRepoMetadataStore, RepoMetadataStore, SavedRepoMetadataStore};
+use crate::utils;
+use crate::utils::add_optional_index;
+use flate2::read::GzDecoder;
 use std::io::{ErrorKind, Read};
+use std::rc::Rc;
 use std::str::FromStr;
 use xml::reader::{Events, XmlEvent};
 use xml::EventReader;
+
+pub fn load_repository(
+    data_path: &str,
+    config: &RepositoryConfig,
+) -> Result<(Repository, SavedRepoMetadataStore), std::io::Error> {
+    let repo_metadata = SavedRepoMetadataStore::new(data_path);
+    let result = fetch_repository_internal(&repo_metadata, config);
+    if result.is_err() {
+        let err = result.err().unwrap();
+        return Err(std::io::Error::new(
+            err.kind(),
+            format!("cannot load current repo state: {}", &err.to_string()),
+        ));
+    }
+
+    Ok((result.unwrap(), repo_metadata))
+}
+
+pub fn fetch_repository(
+    fetcher: Rc<dyn Fetcher>,
+    tmp_path: &str,
+    config: &RepositoryConfig,
+) -> Result<(Repository, LiveRepoMetadataStore), std::io::Error> {
+    let repo_metadata = LiveRepoMetadataStore::new(&config.source.endpoint, tmp_path, fetcher);
+    let result = fetch_repository_internal(&repo_metadata, config);
+    if result.is_err() {
+        let err = result.err().unwrap();
+        return Err(std::io::Error::new(
+            err.kind(),
+            format!("cannot fetch repo state: {}", &err.to_string()),
+        ));
+    }
+    Ok((result.unwrap(), repo_metadata))
+}
+
+fn fetch_repository_internal<T>(
+    state: &T,
+    config: &RepositoryConfig,
+) -> Result<Repository, std::io::Error>
+where
+    T: RepoMetadataStore,
+{
+    let mut collection = Collection {
+        target: Target {
+            release_name: "".to_string(),
+            architectures: vec![],
+        },
+        indexes: vec![],
+        packages: vec![],
+    };
+
+    let repo_mod_path = "repodata/repomd.xml";
+    let result = state.fetch(repo_mod_path);
+    if result.is_err() {
+        let err = result.err().unwrap();
+        return Result::Err(std::io::Error::new(
+            err.kind(),
+            format!("cannot fetch repomod.xml: {}", err.to_string()),
+        ));
+    }
+
+    let (disk_path, mut reader, size) = result.unwrap();
+    let result = parse_repomod(&mut reader);
+    if result.is_err() {
+        let err = result.err().unwrap();
+        return Result::Err(std::io::Error::new(
+            err.kind(),
+            format!("cannot parse repomod.xml: {}", err.to_string()),
+        ));
+    }
+
+    let signature = add_optional_index(
+        state,
+        &format!("{}.asc", repo_mod_path),
+        &mut collection.indexes,
+        Signature::None,
+    )?;
+    if signature.is_some() {
+        let mut text_signature = String::new();
+        signature.unwrap().read_to_string(&mut text_signature)?;
+        collection.indexes.push(IndexFile {
+            file_path: disk_path,
+            path: repo_mod_path.into(),
+            size,
+            hash: Hash::None,
+            signature: Signature::PGPExternal {
+                signature: text_signature,
+            },
+        });
+    } else {
+        collection.indexes.push(IndexFile {
+            file_path: disk_path,
+            path: repo_mod_path.into(),
+            size,
+            hash: Hash::None,
+            signature: Signature::None,
+        });
+    }
+
+    for data in result.unwrap() {
+        let (disk_path, mut reader, size) = state.fetch(&data.location).unwrap();
+
+        if data.type_ == "primary" {
+            if data.location.ends_with(".gz") {
+                reader = Box::new(GzDecoder::new(reader));
+            }
+            let result = parse_packages(&mut reader);
+            if result.is_err() {
+                let err = result.err().unwrap();
+                return Result::Err(std::io::Error::new(
+                    err.kind(),
+                    format!("cannot parse primary.xml: {}", err.to_string()),
+                ));
+            }
+            let mut packages = result.unwrap();
+            collection.packages.append(&mut packages);
+        }
+
+        collection.indexes.push(IndexFile {
+            file_path: disk_path,
+            path: data.location.clone(),
+            size,
+            hash: data.hash.clone(),
+            signature: Signature::None,
+        });
+    }
+
+    collection.target.architectures =
+        collection
+            .packages
+            .iter()
+            .fold(vec![], |mut acc: Vec<String>, x: &Package| {
+                if !acc.contains(&x.architecture) {
+                    acc.push(x.architecture.clone());
+                }
+                acc
+            });
+
+    let mut repo = Repository {
+        name: config.name.clone(),
+        collections: vec![collection],
+    };
+
+    Ok(repo)
+}
 
 #[derive(Debug, Eq, PartialEq, Clone)]
 struct RepomodData {

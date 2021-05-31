@@ -1,5 +1,2 @@
 target
 Cargo.lock
-*.jar
-.idea
-.cargo
