@@ -731,44 +731,11 @@ pub mod tests {
     fn sync_debian_repo_from_scratch() {
         let mut mock_fetcher = MockFetcher::new();
 
-        mock_fetcher.expect_fetch().returning(|url: &str| {
-            Result::Ok(Box::new(match url {
-                "http://fake-url/rc/dists/focal/Release" => {
-                    File::open("samples/debian/Release").unwrap()
-                }
-                "http://fake-url/rc/dists/focal/Release.gpg" => {
-                    File::open("samples/fake-signature").unwrap()
-                }
-                "http://fake-url/rc/dists/focal/InRelease" => {
-                    File::open("samples/debian/Release").unwrap()
-                }
-                "http://fake-url/rc/dists/focal/main/binary-amd64/Packages" => {
-                    File::open("samples/debian/Packages").unwrap()
-                }
-                "http://fake-url/rc/dists/focal/main/binary-amd64/Packages.bz2" => {
-                    File::open("samples/debian/Packages").unwrap()
-                }
-                "http://fake-url/rc/dists/focal/main/binary-amd64/Packages.gz" => {
-                    File::open("samples/debian/Packages").unwrap()
-                }
-                "http://fake-url/rc/dists/focal/main/binary-i386/Packages" => {
-                    File::open("samples/debian/Packages").unwrap()
-                }
-                "http://fake-url/rc/dists/focal/main/binary-i386/Packages.bz2" => {
-                    File::open("samples/debian/Packages").unwrap()
-                }
-                "http://fake-url/rc/dists/focal/main/binary-i386/Packages.gz" => {
-                    File::open("samples/debian/Packages").unwrap()
-                }
-                "http://fake-url/rc/pool/service-discover-agent_0.1.0_amd64.deb" => {
-                    File::open("samples/fake-package").unwrap()
-                }
-                "http://fake-url/rc/pool/service-discover-daemon_0.1.0_amd64.deb" => {
-                    File::open("samples/fake-package").unwrap()
-                }
-                _ => panic!("unexpected url: {}", url),
-            }))
-        });
+        setup_fetcher(
+            &mut mock_fetcher,
+            "samples/debian/Release",
+            "samples/debian/Packages",
+        );
 
         let tmp_dir = tempfile::tempdir().unwrap();
         let config = create_config(&tmp_dir);
@@ -793,6 +760,17 @@ pub mod tests {
         assert_eq!(
             1868,
             contents.get("ubuntu/dists/focal/Release").unwrap().len()
+        );
+        assert_eq!(
+            14,
+            contents
+                .get("ubuntu/dists/focal/Release.gpg")
+                .unwrap()
+                .len()
+        );
+        assert_eq!(
+            1868,
+            contents.get("ubuntu/dists/focal/InRelease").unwrap().len()
         );
         assert_eq!(
             1085,
@@ -853,6 +831,73 @@ pub mod tests {
 
         assert_eq!(0, deletions.len());
         assert_eq!(0, invalidations.len());
+
+        let mut mock_fetcher = MockFetcher::new();
+        setup_fetcher(
+            &mut mock_fetcher,
+            "samples/debian/Release.2",
+            "samples/debian/Packages.2",
+        );
+        let mut destination = MemoryDestination::new("ubuntu");
+        sync_manager
+            .sync_repo_internal(Box::new(mock_fetcher), &mut destination, repo_config)
+            .unwrap();
+
+        destination.print();
+
+        let (contents, deletions, invalidations) = destination.explode();
+        assert_eq!(8, contents.len());
+        assert_eq!(1, deletions.len());
+        assert!(deletions.contains("pool/service-discover-agent_0.1.0_amd64.deb"));
+        assert_eq!(8, invalidations.len());
+        assert!(invalidations.contains("dists/focal/Release"));
+        assert!(!invalidations.contains("dists/focal/Release.gpg"));
+        assert!(invalidations.contains("dists/focal/InRelease"));
+        assert!(invalidations.contains("dists/focal/main/binary-amd64/Packages"));
+        assert!(invalidations.contains("dists/focal/main/binary-amd64/Packages.gz"));
+        assert!(invalidations.contains("dists/focal/main/binary-amd64/Packages.bz2"));
+        assert!(invalidations.contains("dists/focal/main/binary-i386/Packages"));
+        assert!(invalidations.contains("dists/focal/main/binary-i386/Packages.gz"));
+        assert!(invalidations.contains("dists/focal/main/binary-i386/Packages.bz2"));
+    }
+
+    fn setup_fetcher(mock_fetcher: &mut MockFetcher, release: &str, packages: &str) {
+        let packages: String = packages.into();
+        let release: String = release.into();
+        mock_fetcher.expect_fetch().returning(move |url: &str| {
+            Result::Ok(Box::new(match url {
+                "http://fake-url/rc/dists/focal/Release" => File::open(&release).unwrap(),
+                "http://fake-url/rc/dists/focal/Release.gpg" => {
+                    File::open("samples/fake-signature").unwrap()
+                }
+                "http://fake-url/rc/dists/focal/InRelease" => File::open(&release).unwrap(),
+                "http://fake-url/rc/dists/focal/main/binary-amd64/Packages" => {
+                    File::open(&packages).unwrap()
+                }
+                "http://fake-url/rc/dists/focal/main/binary-amd64/Packages.bz2" => {
+                    File::open(&packages).unwrap()
+                }
+                "http://fake-url/rc/dists/focal/main/binary-amd64/Packages.gz" => {
+                    File::open(&packages).unwrap()
+                }
+                "http://fake-url/rc/dists/focal/main/binary-i386/Packages" => {
+                    File::open(&packages).unwrap()
+                }
+                "http://fake-url/rc/dists/focal/main/binary-i386/Packages.bz2" => {
+                    File::open(&packages).unwrap()
+                }
+                "http://fake-url/rc/dists/focal/main/binary-i386/Packages.gz" => {
+                    File::open(&packages).unwrap()
+                }
+                "http://fake-url/rc/pool/service-discover-agent_0.1.0_amd64.deb" => {
+                    File::open("samples/fake-package").unwrap()
+                }
+                "http://fake-url/rc/pool/service-discover-daemon_0.1.0_amd64.deb" => {
+                    File::open("samples/fake-package").unwrap()
+                }
+                _ => panic!("unexpected url: {}", url),
+            }))
+        });
     }
 
     #[test]
