@@ -6,8 +6,8 @@ use futures::{future, Stream, stream};
 #[allow(unused_imports)]
 use reposync_lib::{Api, ApiNoContext, Client, ContextWrapperExt, models,
                       HealthGetResponse,
-                      RepoRepoGetResponse,
-                      RepoRepoSyncPostResponse,
+                      RepositoryRepoGetResponse,
+                      RepositoryRepoSyncPostResponse,
                      };
 use clap::{App, Arg};
 
@@ -30,8 +30,8 @@ fn main() {
             .help("Sets the operation to run")
             .possible_values(&[
                 "HealthGet",
-                "RepoRepoGet",
-                "RepoRepoSyncPost",
+                "RepositoryRepoGet",
+                "RepositoryRepoSyncPost",
             ])
             .required(true)
             .index(1))
@@ -80,14 +80,14 @@ fn main() {
             ));
             info!("{:?} (X-Span-ID: {:?})", result, (client.context() as &dyn Has<XSpanIdString>).get().clone());
         },
-        Some("RepoRepoGet") => {
-            let result = rt.block_on(client.repo_repo_get(
+        Some("RepositoryRepoGet") => {
+            let result = rt.block_on(client.repository_repo_get(
                   ""centos8-prod"".to_string()
             ));
             info!("{:?} (X-Span-ID: {:?})", result, (client.context() as &dyn Has<XSpanIdString>).get().clone());
         },
-        Some("RepoRepoSyncPost") => {
-            let result = rt.block_on(client.repo_repo_sync_post(
+        Some("RepositoryRepoSyncPost") => {
+            let result = rt.block_on(client.repository_repo_sync_post(
                   ""centos8-prod"".to_string()
             ));
             info!("{:?} (X-Span-ID: {:?})", result, (client.context() as &dyn Has<XSpanIdString>).get().clone());

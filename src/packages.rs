@@ -1,16 +1,8 @@
 use data_encoding::HEXLOWER_PERMISSIVE;
-use pgp::armor::Dearmor;
-use pgp::crypto::HashAlgorithm;
-use pgp::de::Deserialize;
-use pgp::packet::{Packet, PacketParser, Subpacket};
-use pgp::types::Version::{New, Old};
-use pgp::types::{Mpi, PublicKeyTrait};
 use pgp::{Deserializable, SignedPublicKey, StandaloneSignature};
 use sha1::digest::{FixedOutput, Update};
 use sha1::{Digest, Sha1};
 use sha2::Sha256;
-use std::borrow::BorrowMut;
-use std::collections::BTreeMap;
 use std::io::{Cursor, Error, ErrorKind, Read, Seek};
 
 #[derive(Debug, Eq, PartialEq, Clone)]
@@ -24,7 +16,7 @@ impl Hash {
     /**
         returns an error when hash doesn't match
     */
-    pub fn matches<T>(&self, mut reader: &mut T) -> Result<bool, std::io::Error>
+    pub fn matches<T>(&self, reader: &mut T) -> Result<bool, std::io::Error>
     where
         T: Read,
     {
@@ -103,13 +95,17 @@ impl Signature {
     pub fn matches<T>(
         &self,
         public_key: &SignedPublicKey,
-        mut reader: &mut T,
+        reader: &mut T,
     ) -> Result<(), std::io::Error>
     where
         T: Read + Seek,
     {
         match self {
             Signature::PGPEmbedded => {
+                //hacky solution: pgp library doesn't support 'PGP SIGNED MESSAGE' yet
+                //here we extract the body and signature and pretend they are different
+                //files, not a flexible implementation but good enough for InRelease
+                //files, which are currently the only use-case.
                 let mut text = String::new();
                 reader.read_to_string(&mut text)?;
                 let result = Signature::extract_body_and_signature(&text);
@@ -163,14 +159,7 @@ pub struct Package {
     pub architecture: String,
     pub path: String,
     pub hash: Hash,
-    pub size: usize,
-}
-
-#[derive(Debug, Eq, PartialEq, Clone, PartialOrd, Ord)]
-pub struct PackageKey {
-    pub name: String,
-    pub version: String,
-    pub architecture: String,
+    pub size: u64,
 }
 
 impl Package {
@@ -182,20 +171,6 @@ impl Package {
             path: "".to_string(),
             hash: Hash::None,
             size: 0,
-        }
-    }
-
-    pub fn is_same_version(&self, other: &Package) -> bool {
-        self.name == other.name
-            && self.version == other.version
-            && self.architecture == other.architecture
-    }
-
-    pub fn key(&self) -> PackageKey {
-        PackageKey {
-            name: self.name.clone(),
-            version: self.version.clone(),
-            architecture: self.architecture.clone(),
         }
     }
 }
@@ -244,6 +219,21 @@ impl Collection {
 pub struct Repository {
     pub name: String,
     pub collections: Vec<Collection>,
+}
+
+impl Repository {
+    pub fn size(&self) -> u64 {
+        self.collections.iter().fold(0, |size, c| {
+            size + c.indexes.iter().fold(0, |size, i| size + i.size)
+                + c.packages.iter().fold(0, |size, p| size + p.size)
+        })
+    }
+
+    pub fn count_packages(&self) -> u64 {
+        self.collections
+            .iter()
+            .fold(0, |count, c| count + c.packages.len() as u64)
+    }
 }
 
 #[cfg(test)]

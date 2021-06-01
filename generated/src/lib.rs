@@ -24,7 +24,7 @@ pub enum HealthGetResponse {
 
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
 #[must_use]
-pub enum RepoRepoGetResponse {
+pub enum RepositoryRepoGetResponse {
     /// The status of the repository.
     TheStatusOfTheRepository
     (models::Status)
@@ -35,7 +35,7 @@ pub enum RepoRepoGetResponse {
 
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
 #[must_use]
-pub enum RepoRepoSyncPostResponse {
+pub enum RepositoryRepoSyncPostResponse {
     /// The synchronization has been queued correctly.
     TheSynchronizationHasBeenQueuedCorrectly
     (models::Status)
@@ -51,22 +51,22 @@ pub trait Api<C: Send + Sync> {
         Poll::Ready(Ok(()))
     }
 
-    /// simple health-check
+    /// Simple health-check
     async fn health_get(
         &self,
         context: &C) -> Result<HealthGetResponse, ApiError>;
 
     /// status of repository
-    async fn repo_repo_get(
+    async fn repository_repo_get(
         &self,
         repo: String,
-        context: &C) -> Result<RepoRepoGetResponse, ApiError>;
+        context: &C) -> Result<RepositoryRepoGetResponse, ApiError>;
 
     /// Perform a synchronization
-    async fn repo_repo_sync_post(
+    async fn repository_repo_sync_post(
         &self,
         repo: String,
-        context: &C) -> Result<RepoRepoSyncPostResponse, ApiError>;
+        context: &C) -> Result<RepositoryRepoSyncPostResponse, ApiError>;
 
 }
 
@@ -78,22 +78,22 @@ pub trait ApiNoContext<C: Send + Sync> {
 
     fn context(&self) -> &C;
 
-    /// simple health-check
+    /// Simple health-check
     async fn health_get(
         &self,
         ) -> Result<HealthGetResponse, ApiError>;
 
     /// status of repository
-    async fn repo_repo_get(
+    async fn repository_repo_get(
         &self,
         repo: String,
-        ) -> Result<RepoRepoGetResponse, ApiError>;
+        ) -> Result<RepositoryRepoGetResponse, ApiError>;
 
     /// Perform a synchronization
-    async fn repo_repo_sync_post(
+    async fn repository_repo_sync_post(
         &self,
         repo: String,
-        ) -> Result<RepoRepoSyncPostResponse, ApiError>;
+        ) -> Result<RepositoryRepoSyncPostResponse, ApiError>;
 
 }
 
@@ -120,7 +120,7 @@ impl<T: Api<C> + Send + Sync, C: Clone + Send + Sync> ApiNoContext<C> for Contex
         ContextWrapper::context(self)
     }
 
-    /// simple health-check
+    /// Simple health-check
     async fn health_get(
         &self,
         ) -> Result<HealthGetResponse, ApiError>
@@ -130,23 +130,23 @@ impl<T: Api<C> + Send + Sync, C: Clone + Send + Sync> ApiNoContext<C> for Contex
     }
 
     /// status of repository
-    async fn repo_repo_get(
+    async fn repository_repo_get(
         &self,
         repo: String,
-        ) -> Result<RepoRepoGetResponse, ApiError>
+        ) -> Result<RepositoryRepoGetResponse, ApiError>
     {
         let context = self.context().clone();
-        self.api().repo_repo_get(repo, &context).await
+        self.api().repository_repo_get(repo, &context).await
     }
 
     /// Perform a synchronization
-    async fn repo_repo_sync_post(
+    async fn repository_repo_sync_post(
         &self,
         repo: String,
-        ) -> Result<RepoRepoSyncPostResponse, ApiError>
+        ) -> Result<RepositoryRepoSyncPostResponse, ApiError>
     {
         let context = self.context().clone();
-        self.api().repo_repo_sync_post(repo, &context).await
+        self.api().repository_repo_sync_post(repo, &context).await
     }
 
 }

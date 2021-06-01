@@ -23,8 +23,8 @@ type ServiceFuture = BoxFuture<'static, Result<Response<Body>, crate::ServiceErr
 
 use crate::{Api,
      HealthGetResponse,
-     RepoRepoGetResponse,
-     RepoRepoSyncPostResponse
+     RepositoryRepoGetResponse,
+     RepositoryRepoSyncPostResponse
 };
 
 mod paths {
@@ -33,23 +33,23 @@ mod paths {
     lazy_static! {
         pub static ref GLOBAL_REGEX_SET: regex::RegexSet = regex::RegexSet::new(vec![
             r"^/health$",
-            r"^/repo/(?P<repo>[^/?#]*)/$",
-            r"^/repo/(?P<repo>[^/?#]*)/sync$"
+            r"^/repository/(?P<repo>[^/?#]*)/$",
+            r"^/repository/(?P<repo>[^/?#]*)/sync$"
         ])
         .expect("Unable to create global regex set");
     }
     pub(crate) static ID_HEALTH: usize = 0;
-    pub(crate) static ID_REPO_REPO_: usize = 1;
+    pub(crate) static ID_REPOSITORY_REPO_: usize = 1;
     lazy_static! {
-        pub static ref REGEX_REPO_REPO_: regex::Regex =
-            regex::Regex::new(r"^/repo/(?P<repo>[^/?#]*)/$")
-                .expect("Unable to create regex for REPO_REPO_");
+        pub static ref REGEX_REPOSITORY_REPO_: regex::Regex =
+            regex::Regex::new(r"^/repository/(?P<repo>[^/?#]*)/$")
+                .expect("Unable to create regex for REPOSITORY_REPO_");
     }
-    pub(crate) static ID_REPO_REPO_SYNC: usize = 2;
+    pub(crate) static ID_REPOSITORY_REPO_SYNC: usize = 2;
     lazy_static! {
-        pub static ref REGEX_REPO_REPO_SYNC: regex::Regex =
-            regex::Regex::new(r"^/repo/(?P<repo>[^/?#]*)/sync$")
-                .expect("Unable to create regex for REPO_REPO_SYNC");
+        pub static ref REGEX_REPOSITORY_REPO_SYNC: regex::Regex =
+            regex::Regex::new(r"^/repository/(?P<repo>[^/?#]*)/sync$")
+                .expect("Unable to create regex for REPOSITORY_REPO_SYNC");
     }
 }
 
@@ -188,15 +188,15 @@ impl<T, C> hyper::service::Service<(Request<Body>, C)> for Service<T, C> where
                                         Ok(response)
             },
 
-            // RepoRepoGet - GET /repo/{repo}/
-            &hyper::Method::GET if path.matched(paths::ID_REPO_REPO_) => {
+            // RepositoryRepoGet - GET /repository/{repo}/
+            &hyper::Method::GET if path.matched(paths::ID_REPOSITORY_REPO_) => {
                 // Path parameters
                 let path: &str = &uri.path().to_string();
                 let path_params =
-                    paths::REGEX_REPO_REPO_
+                    paths::REGEX_REPOSITORY_REPO_
                     .captures(&path)
                     .unwrap_or_else(||
-                        panic!("Path {} matched RE REPO_REPO_ in set but failed match against \"{}\"", path, paths::REGEX_REPO_REPO_.as_str())
+                        panic!("Path {} matched RE REPOSITORY_REPO_ in set but failed match against \"{}\"", path, paths::REGEX_REPOSITORY_REPO_.as_str())
                     );
 
                 let param_repo = match percent_encoding::percent_decode(path_params["repo"].as_bytes()).decode_utf8() {
@@ -213,7 +213,7 @@ impl<T, C> hyper::service::Service<(Request<Body>, C)> for Service<T, C> where
                                         .expect("Unable to create Bad Request response for invalid percent decode"))
                 };
 
-                                let result = api_impl.repo_repo_get(
+                                let result = api_impl.repository_repo_get(
                                             param_repo,
                                         &context
                                     ).await;
@@ -225,18 +225,18 @@ impl<T, C> hyper::service::Service<(Request<Body>, C)> for Service<T, C> where
 
                                         match result {
                                             Ok(rsp) => match rsp {
-                                                RepoRepoGetResponse::TheStatusOfTheRepository
+                                                RepositoryRepoGetResponse::TheStatusOfTheRepository
                                                     (body)
                                                 => {
                                                     *response.status_mut() = StatusCode::from_u16(200).expect("Unable to turn 200 into a StatusCode");
                                                     response.headers_mut().insert(
                                                         CONTENT_TYPE,
                                                         HeaderValue::from_str("application/json")
-                                                            .expect("Unable to create Content-Type header for REPO_REPO_GET_THE_STATUS_OF_THE_REPOSITORY"));
+                                                            .expect("Unable to create Content-Type header for REPOSITORY_REPO_GET_THE_STATUS_OF_THE_REPOSITORY"));
                                                     let body = serde_json::to_string(&body).expect("impossible to fail to serialize");
                                                     *response.body_mut() = Body::from(body);
                                                 },
-                                                RepoRepoGetResponse::RepositoryNotFound
+                                                RepositoryRepoGetResponse::RepositoryNotFound
                                                 => {
                                                     *response.status_mut() = StatusCode::from_u16(404).expect("Unable to turn 404 into a StatusCode");
                                                 },
@@ -252,15 +252,15 @@ impl<T, C> hyper::service::Service<(Request<Body>, C)> for Service<T, C> where
                                         Ok(response)
             },
 
-            // RepoRepoSyncPost - POST /repo/{repo}/sync
-            &hyper::Method::POST if path.matched(paths::ID_REPO_REPO_SYNC) => {
+            // RepositoryRepoSyncPost - POST /repository/{repo}/sync
+            &hyper::Method::POST if path.matched(paths::ID_REPOSITORY_REPO_SYNC) => {
                 // Path parameters
                 let path: &str = &uri.path().to_string();
                 let path_params =
-                    paths::REGEX_REPO_REPO_SYNC
+                    paths::REGEX_REPOSITORY_REPO_SYNC
                     .captures(&path)
                     .unwrap_or_else(||
-                        panic!("Path {} matched RE REPO_REPO_SYNC in set but failed match against \"{}\"", path, paths::REGEX_REPO_REPO_SYNC.as_str())
+                        panic!("Path {} matched RE REPOSITORY_REPO_SYNC in set but failed match against \"{}\"", path, paths::REGEX_REPOSITORY_REPO_SYNC.as_str())
                     );
 
                 let param_repo = match percent_encoding::percent_decode(path_params["repo"].as_bytes()).decode_utf8() {
@@ -277,7 +277,7 @@ impl<T, C> hyper::service::Service<(Request<Body>, C)> for Service<T, C> where
                                         .expect("Unable to create Bad Request response for invalid percent decode"))
                 };
 
-                                let result = api_impl.repo_repo_sync_post(
+                                let result = api_impl.repository_repo_sync_post(
                                             param_repo,
                                         &context
                                     ).await;
@@ -289,18 +289,18 @@ impl<T, C> hyper::service::Service<(Request<Body>, C)> for Service<T, C> where
 
                                         match result {
                                             Ok(rsp) => match rsp {
-                                                RepoRepoSyncPostResponse::TheSynchronizationHasBeenQueuedCorrectly
+                                                RepositoryRepoSyncPostResponse::TheSynchronizationHasBeenQueuedCorrectly
                                                     (body)
                                                 => {
                                                     *response.status_mut() = StatusCode::from_u16(201).expect("Unable to turn 201 into a StatusCode");
                                                     response.headers_mut().insert(
                                                         CONTENT_TYPE,
                                                         HeaderValue::from_str("application/json")
-                                                            .expect("Unable to create Content-Type header for REPO_REPO_SYNC_POST_THE_SYNCHRONIZATION_HAS_BEEN_QUEUED_CORRECTLY"));
+                                                            .expect("Unable to create Content-Type header for REPOSITORY_REPO_SYNC_POST_THE_SYNCHRONIZATION_HAS_BEEN_QUEUED_CORRECTLY"));
                                                     let body = serde_json::to_string(&body).expect("impossible to fail to serialize");
                                                     *response.body_mut() = Body::from(body);
                                                 },
-                                                RepoRepoSyncPostResponse::RepositoryNotFound
+                                                RepositoryRepoSyncPostResponse::RepositoryNotFound
                                                 => {
                                                     *response.status_mut() = StatusCode::from_u16(404).expect("Unable to turn 404 into a StatusCode");
                                                 },
@@ -317,8 +317,8 @@ impl<T, C> hyper::service::Service<(Request<Body>, C)> for Service<T, C> where
             },
 
             _ if path.matched(paths::ID_HEALTH) => method_not_allowed(),
-            _ if path.matched(paths::ID_REPO_REPO_) => method_not_allowed(),
-            _ if path.matched(paths::ID_REPO_REPO_SYNC) => method_not_allowed(),
+            _ if path.matched(paths::ID_REPOSITORY_REPO_) => method_not_allowed(),
+            _ if path.matched(paths::ID_REPOSITORY_REPO_SYNC) => method_not_allowed(),
             _ => Ok(Response::builder().status(StatusCode::NOT_FOUND)
                     .body(Body::empty())
                     .expect("Unable to create Not Found response"))
@@ -334,10 +334,10 @@ impl<T> RequestParser<T> for ApiRequestParser {
         match request.method() {
             // HealthGet - GET /health
             &hyper::Method::GET if path.matched(paths::ID_HEALTH) => Ok("HealthGet"),
-            // RepoRepoGet - GET /repo/{repo}/
-            &hyper::Method::GET if path.matched(paths::ID_REPO_REPO_) => Ok("RepoRepoGet"),
-            // RepoRepoSyncPost - POST /repo/{repo}/sync
-            &hyper::Method::POST if path.matched(paths::ID_REPO_REPO_SYNC) => Ok("RepoRepoSyncPost"),
+            // RepositoryRepoGet - GET /repository/{repo}/
+            &hyper::Method::GET if path.matched(paths::ID_REPOSITORY_REPO_) => Ok("RepositoryRepoGet"),
+            // RepositoryRepoSyncPost - POST /repository/{repo}/sync
+            &hyper::Method::POST if path.matched(paths::ID_REPOSITORY_REPO_SYNC) => Ok("RepositoryRepoSyncPost"),
             _ => Err(()),
         }
     }

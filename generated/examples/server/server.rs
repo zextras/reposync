@@ -97,8 +97,8 @@ impl<C> Server<C> {
 use reposync_lib::{
     Api,
     HealthGetResponse,
-    RepoRepoGetResponse,
-    RepoRepoSyncPostResponse,
+    RepositoryRepoGetResponse,
+    RepositoryRepoSyncPostResponse,
 };
 use reposync_lib::server::MakeService;
 use std::error::Error;
@@ -107,7 +107,7 @@ use swagger::ApiError;
 #[async_trait]
 impl<C> Api<C> for Server<C> where C: Has<XSpanIdString> + Send + Sync
 {
-    /// simple health-check
+    /// Simple health-check
     async fn health_get(
         &self,
         context: &C) -> Result<HealthGetResponse, ApiError>
@@ -118,24 +118,24 @@ impl<C> Api<C> for Server<C> where C: Has<XSpanIdString> + Send + Sync
     }
 
     /// status of repository
-    async fn repo_repo_get(
+    async fn repository_repo_get(
         &self,
         repo: String,
-        context: &C) -> Result<RepoRepoGetResponse, ApiError>
+        context: &C) -> Result<RepositoryRepoGetResponse, ApiError>
     {
         let context = context.clone();
-        info!("repo_repo_get(\"{}\") - X-Span-ID: {:?}", repo, context.get().0.clone());
+        info!("repository_repo_get(\"{}\") - X-Span-ID: {:?}", repo, context.get().0.clone());
         Err("Generic failuare".into())
     }
 
     /// Perform a synchronization
-    async fn repo_repo_sync_post(
+    async fn repository_repo_sync_post(
         &self,
         repo: String,
-        context: &C) -> Result<RepoRepoSyncPostResponse, ApiError>
+        context: &C) -> Result<RepositoryRepoSyncPostResponse, ApiError>
     {
         let context = context.clone();
-        info!("repo_repo_sync_post(\"{}\") - X-Span-ID: {:?}", repo, context.get().0.clone());
+        info!("repository_repo_sync_post(\"{}\") - X-Span-ID: {:?}", repo, context.get().0.clone());
         Err("Generic failuare".into())
     }
 

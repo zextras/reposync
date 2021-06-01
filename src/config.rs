@@ -1,6 +1,5 @@
 use pgp::{Deserializable, SignedPublicKey};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
 use std::fs;
 use std::io::ErrorKind;
 
@@ -58,9 +57,12 @@ pub struct RepositoryConfig {
 pub struct GeneralConfig {
     pub data_path: String,
     pub tmp_path: String,
+    pub bind_address: String,
     pub timeout: u32,
-    pub debounce: u32,
-    pub auto_align: u32,
+    pub max_retries: u32,
+    pub retry_sleep: u64,
+    pub min_sync_delay: u32,
+    pub max_sync_delay: u32,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -116,6 +118,13 @@ pub fn load_config(path: &str) -> Result<Config, String> {
             ));
         }
         used_names.push(&repo.name);
+
+        if !["debian", "redhat"].contains(&repo.source.kind.as_str()) {
+            return Result::Err(format!(
+                "unknown repository type '{}', only 'debian' and 'redhat' are supported",
+                &repo.source.kind
+            ));
+        }
         let result = repo.source.parse_public_key();
         if result.is_err() {
             return Result::Err(result.err().unwrap().to_string());
@@ -145,15 +154,8 @@ fn normalize(s: &str) -> String {
 
 #[cfg(test)]
 pub mod tests {
-    use crate::config::{load_config, Config, SourceConfig};
-    use pgp::armor::BlockType;
-    use pgp::packet::{Packet, PacketParser, PublicKey};
-    use pgp::types::{PublicKeyTrait, Version};
-    use pgp::{Deserializable, PublicKeyParser, SignedPublicKey};
-    use std::convert::TryFrom;
+    use crate::config::{load_config, SourceConfig};
     use std::fs;
-    use std::io::{BufReader, Cursor, Read};
-    use std::str::FromStr;
 
     #[test]
     fn load_sample_config() {

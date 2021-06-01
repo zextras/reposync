@@ -1,20 +1,25 @@
-use crate::config::{Config, GeneralConfig, RepositoryConfig};
+use crate::config::{Config, RepositoryConfig};
 use crate::destination::{Destination, S3Destination};
 use crate::fetcher::Fetcher;
-use crate::packages::{Collection, Hash, IndexFile, Package, PackageKey, Repository};
+use crate::locks::Lock;
+use crate::packages::{Collection, Hash, IndexFile, Package, Repository};
 use crate::state::SavedRepoMetadataStore;
 use crate::{debian, fetcher, redhat};
-use std::borrow::{Borrow, BorrowMut};
-use std::cell::RefCell;
-use std::collections::{BTreeMap, BTreeSet};
+use core::fmt;
+#[cfg(test)]
+use mockall::automock;
+use std::borrow::Borrow;
+use std::collections::BTreeMap;
+use std::fmt::Formatter;
 use std::fs::File;
-use std::io::{ErrorKind, Read, Seek, SeekFrom, Write};
-use std::iter::Chain;
+use std::io::{Error, ErrorKind, Seek, SeekFrom, Write};
+use std::ops::{Add, Sub};
 use std::rc::Rc;
-use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
+use std::thread;
+use std::time::{Duration, SystemTime};
 
-/**
+/*
 Steps:
  - lock repository
  - create temp dir for metadata
@@ -31,10 +36,6 @@ Steps:
  - unlock
 */
 
-trait Uploader {
-    fn upload(path: &str, reader: &dyn Read) -> Result<(), std::io::Error>;
-}
-
 struct CopyOperation {
     is_replace: bool,
     path: String,
@@ -44,32 +45,215 @@ struct CopyOperation {
 
 struct DeleteOperation {
     path: String,
-    hash: Hash,
 }
 
-struct Lock {}
+#[derive(Clone)]
+pub enum RepoStatus {
+    Syncing,
+    Waiting,
+}
 
-impl Lock {
-    fn lock_repo(&self, repo_name: &str) -> () {}
+impl fmt::Display for RepoStatus {
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), fmt::Error> {
+        match self {
+            RepoStatus::Syncing => write!(f, "syncing"),
+            RepoStatus::Waiting => write!(f, "waiting"),
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct SyncStatus {
+    pub current: RepoStatus,
+    pub next_sync: SystemTime,
+    pub last_sync: SystemTime,
+    pub last_result: Option<String>,
+}
+
+#[cfg_attr(test, automock)]
+pub trait TimeProvider: Send + Sync {
+    fn now(&self) -> SystemTime;
+}
+
+pub struct RealTimeProvider {}
+impl TimeProvider for RealTimeProvider {
+    fn now(&self) -> SystemTime {
+        SystemTime::now()
+    }
 }
 
 pub struct SyncManager {
     config: Config,
     lock: Lock,
+    time_provider: Arc<dyn TimeProvider>,
+    sync_map: Arc<Mutex<BTreeMap<String, SyncStatus>>>,
 }
 
 impl SyncManager {
     pub fn new(config: Config) -> Self {
+        Self::new_internal(config, Lock::new(), Arc::new(RealTimeProvider {}))
+    }
+
+    fn new_internal(config: Config, lock: Lock, time_provider: Arc<dyn TimeProvider>) -> Self {
+        let mut map = BTreeMap::new();
+        config.repo.iter().for_each(|r| {
+            map.insert(
+                r.name.clone(),
+                SyncStatus {
+                    current: RepoStatus::Waiting,
+                    next_sync: time_provider.now().add(Duration::from_secs(
+                        config.general.max_sync_delay as u64 * 60,
+                    )),
+                    last_sync: SystemTime::UNIX_EPOCH,
+                    last_result: None,
+                },
+            );
+        });
         SyncManager {
             config,
-            lock: Lock {},
+            lock,
+            time_provider,
+            sync_map: Arc::new(Mutex::new(map)),
         }
+    }
+
+    pub fn start_scheduler(self: Arc<Self>) {
+        thread::spawn(move || loop {
+            let now = self.time_provider.now();
+            if let Some((name, time)) = self.next_repo_to_sync() {
+                if let Ok(sleep_time) = time.duration_since(now) {
+                    thread::sleep(sleep_time.min(Duration::from_secs(10)));
+                } else {
+                    //negative time
+                    let result = self.sync_repo(&name);
+                    if let Err(err) = result {
+                        self.sync_completed(&name, &err.to_string());
+                    } else {
+                        self.sync_completed(&name, "successful");
+                    }
+                }
+            } else {
+                thread::sleep(Duration::from_secs(10));
+            }
+        });
+    }
+
+    ///returns true if all paths in the configuration are accessible
+    pub fn check_permissions(&self) -> Result<(), std::io::Error> {
+        Self::check_writable(&self.config.general.data_path)?;
+        Self::check_writable(&self.config.general.tmp_path)?;
+        Ok(())
+    }
+
+    fn check_writable(path: &str) -> Result<(), Error> {
+        let file = File::open(path)?;
+        let metadata = file.metadata()?;
+        if !metadata.is_dir() {
+            return Err(std::io::Error::new(
+                ErrorKind::InvalidData,
+                format!("expected directory, found file instead '{}'", path),
+            ));
+        }
+        if metadata.permissions().readonly() {
+            return Err(std::io::Error::new(
+                ErrorKind::InvalidData,
+                format!("expected write access, found read-only for '{}'", path),
+            ));
+        }
+        Ok(())
+    }
+
+    pub fn queue_sync(&self, repo_name: &str) {
+        let now = self.time_provider.now();
+        let mut map = self.sync_map.lock().unwrap();
+        //set next_sync
+        if let Some(status) = map.get_mut(repo_name) {
+            let tmp_next_sync = now
+                .add(Duration::from_secs(
+                    self.config.general.min_sync_delay as u64 * 60,
+                ))
+                .sub(now.duration_since(status.last_sync).unwrap());
+            status.next_sync = tmp_next_sync.min(status.next_sync);
+        }
+    }
+
+    fn sync_completed(&self, repo_name: &str, result: &str) {
+        let now = self.time_provider.now();
+        let mut map = self.sync_map.lock().unwrap();
+        //set next_sync
+        if let Some(status) = map.get_mut(repo_name) {
+            status.last_sync = now;
+            status.next_sync = now.add(Duration::from_secs(
+                self.config.general.max_sync_delay as u64 * 60,
+            ));
+            status.last_result = Some(result.into());
+        }
+    }
+
+    pub fn next_repo_to_sync(&self) -> Option<(String, SystemTime)> {
+        let map = self.sync_map.lock().unwrap();
+        let mut closer = None;
+
+        for (key, value) in &*map {
+            if let Some((name, next_sync)) = closer {
+                if value.next_sync < next_sync {
+                    closer = Some((key.clone(), value.next_sync.clone()));
+                } else {
+                    closer = Some((name, next_sync));
+                }
+            } else {
+                closer = Some((key.clone(), value.next_sync.clone()));
+            }
+        }
+
+        closer
+    }
+
+    fn _repo_status(&self, repo_name: &str) -> RepoStatus {
+        if self.lock.is_repo_syncing(repo_name) {
+            RepoStatus::Syncing
+        } else {
+            RepoStatus::Waiting
+        }
+    }
+
+    pub fn get_status(&self, repo_name: &str) -> Option<SyncStatus> {
+        let map = self.sync_map.lock().unwrap();
+        if let Some(status) = map.get(repo_name) {
+            let mut new_status = status.clone();
+            new_status.current = self._repo_status(repo_name);
+            Some(new_status)
+        } else {
+            None
+        }
+    }
+
+    pub fn load_current_by_name(
+        &self,
+        repo_name: &str,
+    ) -> Result<Option<(Repository, SavedRepoMetadataStore)>, std::io::Error> {
+        let repo_config = self.get_repo_config(repo_name);
+        if let Some(repo_config) = repo_config {
+            let result = self.load_current(repo_config);
+            if let Ok(result) = result {
+                Ok(Some(result))
+            } else {
+                Err(result.err().unwrap())
+            }
+        } else {
+            Ok(None)
+        }
+    }
+
+    fn get_repo_config(&self, repo_name: &str) -> Option<&RepositoryConfig> {
+        self.config.repo.iter().find(|x| x.name == repo_name)
     }
 
     pub fn load_current(
         &self,
         repo_config: &RepositoryConfig,
     ) -> Result<(Repository, SavedRepoMetadataStore), std::io::Error> {
+        let _write_lock = self.lock.lock_write(&repo_config.name);
         let data_path = format!("{}/{}", self.config.general.data_path, repo_config.name);
 
         let result = File::open(&data_path);
@@ -99,7 +283,8 @@ impl SyncManager {
     }
 
     pub fn sync_repo(&self, repo_name: &str) -> Result<(), std::io::Error> {
-        let repo_config = self.config.repo.iter().find(|x| x.name == repo_name);
+        println!("starting synchronization of {}", repo_name);
+        let repo_config = self.get_repo_config(repo_name);
         if repo_config.is_none() {
             return Err(std::io::Error::new(
                 ErrorKind::NotFound,
@@ -109,10 +294,11 @@ impl SyncManager {
         let repo_config = repo_config.unwrap();
 
         let fetcher = fetcher::create_chain(
-            3,
-            2000,
+            self.config.general.max_retries,
+            Duration::from_secs(self.config.general.retry_sleep),
             repo_config.source.username.clone(),
             repo_config.source.password.clone(),
+            Duration::from_secs(self.config.general.timeout as u64),
         )?;
         let mut destination = S3Destination::new(
             &repo_config.destination.path,
@@ -125,8 +311,18 @@ impl SyncManager {
             &repo_config.destination.access_key_secret,
         );
 
-        let lock = self.lock.lock_repo(&repo_config.name);
-        self.sync_repo_internal(fetcher, &mut destination, repo_config)
+        return if let Some(_lock) = self.lock.lock_sync(&repo_config.name) {
+            let result = self.sync_repo_internal(fetcher, &mut destination, repo_config);
+            if result.is_ok() {
+                println!("repo fully synchronized");
+            }
+            result
+        } else {
+            Result::Err(std::io::Error::new(
+                ErrorKind::WouldBlock,
+                "sync already in progress",
+            ))
+        };
     }
 
     fn sync_repo_internal(
@@ -216,6 +412,7 @@ impl SyncManager {
             destination.delete(&operation.path)?;
         }
 
+        let _write_lock = self.lock.lock_write(&repo_config.name);
         metadata_store.replace(&format!(
             "{}/{}",
             self.config.general.data_path, repo_config.name
@@ -383,9 +580,8 @@ impl SyncManager {
                     .iter()
                     //skip every path still in use
                     .filter(|&(key, _)| !new_packages.contains_key(key))
-                    .map(|(key, current_package)| DeleteOperation {
+                    .map(|(_key, current_package)| DeleteOperation {
                         path: current_package.path.clone(),
-                        hash: current_package.hash.clone(),
                     })
                     .collect(),
             );
@@ -444,7 +640,6 @@ impl SyncManager {
                     .filter(|x| !new_indexes.contains_key(&x.path))
                     .map(|x| DeleteOperation {
                         path: x.path.clone(),
-                        hash: x.hash.clone(),
                     })
                     .collect(),
             );
@@ -464,12 +659,12 @@ pub mod tests {
     use crate::config::{Config, DestinationConfig, GeneralConfig, RepositoryConfig, SourceConfig};
     use crate::destination::MemoryDestination;
     use crate::fetcher::MockFetcher;
-    use crate::packages::Repository;
-    use crate::state::{LiveRepoMetadataStore, RepoMetadataStore, SavedRepoMetadataStore};
-    use crate::sync::{Lock, SyncManager};
-    use mockall::predicate;
+    use crate::sync::{Lock, MockTimeProvider, RealTimeProvider, SyncManager};
     use std::fs::File;
-    use std::rc::Rc;
+    use std::ops::Add;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::{Arc, Mutex};
+    use std::time::{Duration, UNIX_EPOCH};
     use tempfile::TempDir;
 
     fn create_config(tmp_dir: &TempDir) -> Config {
@@ -477,9 +672,12 @@ pub mod tests {
             general: GeneralConfig {
                 data_path: format!("{}/data", tmp_dir.path().to_str().unwrap()),
                 tmp_path: format!("{}/tmp", tmp_dir.path().to_str().unwrap()),
+                bind_address: "".to_string(),
                 timeout: 0,
-                debounce: 0,
-                auto_align: 0,
+                max_retries: 0,
+                retry_sleep: 0,
+                min_sync_delay: 10,
+                max_sync_delay: 30,
             },
             repo: vec![RepositoryConfig {
                 name: "test-ubuntu".to_string(),
@@ -515,11 +713,13 @@ pub mod tests {
         let tmp_dir = tempfile::tempdir().unwrap();
         let config = create_config(&tmp_dir);
 
-        let mut sync_manager = SyncManager {
+        let sync_manager = SyncManager {
             config: config.clone(),
-            lock: Lock {},
+            lock: Lock::new(),
+            time_provider: Arc::new(RealTimeProvider {}),
+            sync_map: Arc::new(Mutex::new(Default::default())),
         };
-        let (repository, saved_metadata_store) = sync_manager
+        let (repository, _saved_metadata_store) = sync_manager
             .load_current(&config.repo.get(0).unwrap())
             .unwrap();
 
@@ -576,9 +776,11 @@ pub mod tests {
         let repo_config = config.repo.get(0).unwrap();
         let mut destination = MemoryDestination::new("ubuntu");
 
-        let mut sync_manager = SyncManager {
+        let sync_manager = SyncManager {
             config: config.clone(),
-            lock: Lock {},
+            lock: Lock::new(),
+            sync_map: Arc::new(Mutex::new(Default::default())),
+            time_provider: Arc::new(RealTimeProvider {}),
         };
         sync_manager
             .sync_repo_internal(Box::new(mock_fetcher), &mut destination, repo_config)
@@ -651,5 +853,48 @@ pub mod tests {
 
         assert_eq!(0, deletions.len());
         assert_eq!(0, invalidations.len());
+    }
+
+    #[test]
+    fn scheduler() {
+        let tmp_dir = tempfile::tempdir().unwrap();
+        let config = create_config(&tmp_dir);
+        let secs_offset = Arc::new(AtomicU64::new(0));
+
+        let mut mock = MockTimeProvider::new();
+        {
+            let secs_offset = secs_offset.clone();
+            mock.expect_now().returning(move || {
+                UNIX_EPOCH.add(Duration::from_secs(secs_offset.load(Ordering::SeqCst)))
+            });
+        }
+
+        let sync_manager = SyncManager::new_internal(config.clone(), Lock::new(), Arc::new(mock));
+
+        secs_offset.store(0, Ordering::SeqCst);
+        {
+            let (next_name, next_time) = sync_manager.next_repo_to_sync().unwrap();
+            assert_eq!("test-ubuntu", next_name);
+            assert_eq!(UNIX_EPOCH.add(Duration::from_secs(30 * 60)), next_time);
+        }
+        {
+            sync_manager.queue_sync("test-ubuntu");
+            let (next_name, next_time) = sync_manager.next_repo_to_sync().unwrap();
+            assert_eq!("test-ubuntu", next_name);
+            assert_eq!(UNIX_EPOCH.add(Duration::from_secs(10 * 60)), next_time);
+        }
+        secs_offset.store(60, Ordering::SeqCst);
+        {
+            sync_manager.sync_completed("test-ubuntu", "success");
+            let (next_name, next_time) = sync_manager.next_repo_to_sync().unwrap();
+            assert_eq!("test-ubuntu", next_name);
+            assert_eq!(UNIX_EPOCH.add(Duration::from_secs(31 * 60)), next_time);
+        }
+        {
+            sync_manager.queue_sync("test-ubuntu");
+            let (next_name, next_time) = sync_manager.next_repo_to_sync().unwrap();
+            assert_eq!("test-ubuntu", next_name);
+            assert_eq!(UNIX_EPOCH.add(Duration::from_secs(11 * 60)), next_time);
+        }
     }
 }

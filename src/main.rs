@@ -3,6 +3,7 @@ mod config;
 mod debian;
 mod destination;
 mod fetcher;
+mod locks;
 mod packages;
 mod redhat;
 mod server;
@@ -10,7 +11,6 @@ mod state;
 mod sync;
 mod utils;
 
-use crate::config::Config;
 use crate::sync::SyncManager;
 use clap::{App, Arg};
 use std::process::exit;
@@ -27,8 +27,7 @@ fn main() {
     };
 
     let matches = App::new("RepoSync")
-        .version("0.1")
-        .author("Davide Baldo <davide.baldo@zextras.com>")
+        .version("0.9")
         .about("Keep a repository synchronized to an S3 bucket")
         .args(&[
             Arg::with_name("config")
@@ -41,7 +40,7 @@ fn main() {
             Arg::with_name("action")
                 .long("action")
                 .value_name("ACTION")
-                .help("which action to perform")
+                .help("action to perform, 'check', 'sync' or 'server'")
                 .takes_value(true)
                 .required(true)
                 .validator(action_validator)
@@ -72,15 +71,14 @@ fn main() {
         }
         "sync" => {
             if let Some(repo_name) = matches.value_of("repository") {
-                let mut repo_names: Vec<String>;
+                let repo_names: Vec<String>;
                 if repo_name == "all" {
                     repo_names = config.repo.iter().map(|r| r.name.clone()).collect();
                 } else {
                     repo_names = vec![repo_name.into()]
                 }
-                let mut sync_manager = SyncManager::new(config);
+                let sync_manager = SyncManager::new(config);
                 for repo_name in repo_names {
-                    println!("starting synchronization of {}", repo_name);
                     let result = sync_manager.sync_repo(&repo_name);
                     if result.is_err() {
                         println!(
@@ -89,7 +87,6 @@ fn main() {
                         );
                         exit(1);
                     }
-                    println!("repo fully synchronized");
                 }
                 exit(0);
             } else {
@@ -98,8 +95,16 @@ fn main() {
             }
         }
         "server" => {
-            start_server(SyncManager::new(config));
-            exit(0);
+            let result = start_server(
+                &config.general.bind_address.clone(),
+                SyncManager::new(config),
+            );
+            if let Err(err) = result {
+                println!("cannot start http server: {}", err);
+                exit(1);
+            } else {
+                exit(0);
+            }
         }
         _ => {
             panic!("unknown action {}", action);
@@ -108,6 +113,6 @@ fn main() {
 }
 
 #[tokio::main]
-async fn start_server(sync_manager: SyncManager) {
-    server::create(sync_manager, "127.0.0.1:8080").await;
+async fn start_server(bind_address: &str, sync_manager: SyncManager) -> hyper::Result<()> {
+    server::create(sync_manager, &bind_address).await
 }

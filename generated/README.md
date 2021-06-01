@@ -14,7 +14,7 @@ To see how to make this your own, look here:
 [README]((https://openapi-generator.tech))
 
 - API version: 1.0.0
-- Build date: 2021-05-25T08:22:01.922091Z[UTC]
+- Build date: 2021-05-31T07:24:49.968697Z[UTC]
 
 
 
@@ -62,8 +62,8 @@ To run a client, follow one of the following simple steps:
 
 ```
 cargo run --example client HealthGet
-cargo run --example client RepoRepoGet
-cargo run --example client RepoRepoSyncPost
+cargo run --example client RepositoryRepoGet
+cargo run --example client RepositoryRepoSyncPost
 ```
 
 ### HTTPS
@@ -97,9 +97,9 @@ All URIs are relative to *http://localhost*
 
 Method | HTTP request | Description
 ------------- | ------------- | -------------
-[****](docs/default_api.md#) | **GET** /health | simple health-check
-[****](docs/default_api.md#) | **GET** /repo/{repo}/ | status of repository
-[****](docs/default_api.md#) | **POST** /repo/{repo}/sync | Perform a synchronization
+[****](docs/default_api.md#) | **GET** /health | Simple health-check
+[****](docs/default_api.md#) | **GET** /repository/{repo}/ | status of repository
+[****](docs/default_api.md#) | **POST** /repository/{repo}/sync | Perform a synchronization
 
 
 ## Documentation For Models

@@ -4,14 +4,14 @@ All URIs are relative to *http://localhost*
 
 Method | HTTP request | Description
 ------------- | ------------- | -------------
-****](default_api.md#) | **GET** /health | simple health-check
-****](default_api.md#) | **GET** /repo/{repo}/ | status of repository
-****](default_api.md#) | **POST** /repo/{repo}/sync | Perform a synchronization
+****](default_api.md#) | **GET** /health | Simple health-check
+****](default_api.md#) | **GET** /repository/{repo}/ | status of repository
+****](default_api.md#) | **POST** /repository/{repo}/sync | Perform a synchronization
 
 
 # ****
 > ()
-simple health-check
+Simple health-check
 
 ### Required Parameters
 This endpoint does not need any parameter.

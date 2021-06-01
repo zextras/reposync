@@ -1,14 +1,9 @@
-use crate::config::{RepositoryConfig, SourceConfig};
+use crate::config::RepositoryConfig;
 use crate::fetcher::Fetcher;
-use crate::packages::Signature::{PGPEmbedded, PGPExternal};
 use crate::packages::{Collection, Hash, IndexFile, Package, Repository, Signature, Target};
 use crate::state::{LiveRepoMetadataStore, RepoMetadataStore, SavedRepoMetadataStore};
 use crate::utils::add_optional_index;
-use data_encoding::BASE32_NOPAD;
 use regex::Regex;
-use std::collections::BTreeMap;
-use std::error::Error;
-use std::fs::File;
 use std::io::{BufRead, BufReader, ErrorKind, Read};
 use std::rc::Rc;
 use std::str::FromStr;
@@ -263,7 +258,7 @@ where
     Parse packages filename streaming line per line, line which starts with an empty space(' ')
     are a continuation of the previous line.
 */
-pub fn parse_packages<R>(mut input_read: R) -> Result<Vec<Package>, std::io::Error>
+pub fn parse_packages<R>(input_read: R) -> Result<Vec<Package>, std::io::Error>
 where
     R: Read,
 {
@@ -274,9 +269,9 @@ where
     let mut packages: Vec<Package> = Vec::new();
     let mut current = Package::empty();
 
-    let mut check_and_add = |key: &mut String,
-                             value: &mut String,
-                             current: &mut Package|
+    let check_and_add = |key: &mut String,
+                         value: &mut String,
+                         current: &mut Package|
      -> Result<(), std::io::Error> {
         if key.len() > 0 {
             match key.as_str() {
@@ -287,7 +282,7 @@ where
                 "SHA256" => current.hash = Hash::Sha256 { hex: value.clone() },
                 "Size" => {
                     let clean_value = value.trim();
-                    let result = usize::from_str(clean_value);
+                    let result = u64::from_str(clean_value);
                     if result.is_err() {
                         return Result::Err(std::io::Error::new(
                             ErrorKind::InvalidData,
@@ -311,7 +306,6 @@ where
             check_and_add(&mut key, &mut value, &mut current)?;
             if current.name.len() > 0 {
                 packages.push(current);
-                current = Package::empty();
             }
             break;
         }
@@ -353,16 +347,13 @@ where
 pub mod tests {
     use crate::config::{DestinationConfig, RepositoryConfig, SourceConfig};
     use crate::debian::{
-        fetch_repository, fetch_repository_internal, parse_packages, parse_release,
-        LiveRepoMetadataStore, Package, PackagesReference,
+        fetch_repository_internal, parse_packages, parse_release, LiveRepoMetadataStore, Package,
     };
-    use crate::fetcher::{Fetcher, MockFetcher};
+    use crate::fetcher::MockFetcher;
     use crate::packages::{Hash, IndexFile, Signature};
     use crate::state::RepoMetadataStore;
-    use mockall::predicate;
-    use std::fs;
     use std::fs::File;
-    use std::io::{BufRead, BufReader, Cursor, ErrorKind, Read};
+    use std::io::Read;
     use std::rc::Rc;
 
     #[test]
@@ -451,7 +442,8 @@ pub mod tests {
             .read("dists/focal/Release")
             .unwrap()
             .unwrap()
-            .read_to_string(&mut text);
+            .read_to_string(&mut text)
+            .unwrap();
         assert!(text.starts_with("Origin: Artifactory"));
 
         assert!(state.read("un-existing-file").unwrap().is_none())

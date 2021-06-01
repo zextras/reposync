@@ -33,10 +33,14 @@ pub struct Status {
     #[serde(rename = "size")]
     pub size: i64,
 
+    /// Number of packages in the last synchronization.
+    #[serde(rename = "packages")]
+    pub packages: isize,
+
 }
 
 impl Status {
-    pub fn new(name: String, status: String, next_sync: i64, last_sync: i64, last_result: String, size: i64, ) -> Status {
+    pub fn new(name: String, status: String, next_sync: i64, last_sync: i64, last_result: String, size: i64, packages: isize, ) -> Status {
         Status {
             name: name,
             status: status,
@@ -44,6 +48,7 @@ impl Status {
             last_sync: last_sync,
             last_result: last_result,
             size: size,
+            packages: packages,
         }
     }
 }
@@ -78,6 +83,10 @@ impl std::string::ToString for Status {
         params.push("size".to_string());
         params.push(self.size.to_string());
 
+
+        params.push("packages".to_string());
+        params.push(self.packages.to_string());
+
         params.join(",").to_string()
     }
 }
@@ -98,6 +107,7 @@ impl std::str::FromStr for Status {
             pub last_sync: Vec<i64>,
             pub last_result: Vec<String>,
             pub size: Vec<i64>,
+            pub packages: Vec<isize>,
         }
 
         let mut intermediate_rep = IntermediateRep::default();
@@ -120,6 +130,7 @@ impl std::str::FromStr for Status {
                     "last_sync" => intermediate_rep.last_sync.push(<i64 as std::str::FromStr>::from_str(val).map_err(|x| format!("{}", x))?),
                     "last_result" => intermediate_rep.last_result.push(<String as std::str::FromStr>::from_str(val).map_err(|x| format!("{}", x))?),
                     "size" => intermediate_rep.size.push(<i64 as std::str::FromStr>::from_str(val).map_err(|x| format!("{}", x))?),
+                    "packages" => intermediate_rep.packages.push(<isize as std::str::FromStr>::from_str(val).map_err(|x| format!("{}", x))?),
                     _ => return std::result::Result::Err("Unexpected key while parsing Status".to_string())
                 }
             }
@@ -136,6 +147,7 @@ impl std::str::FromStr for Status {
             last_sync: intermediate_rep.last_sync.into_iter().next().ok_or("last_sync missing in Status".to_string())?,
             last_result: intermediate_rep.last_result.into_iter().next().ok_or("last_result missing in Status".to_string())?,
             size: intermediate_rep.size.into_iter().next().ok_or("size missing in Status".to_string())?,
+            packages: intermediate_rep.packages.into_iter().next().ok_or("packages missing in Status".to_string())?,
         })
     }
 }

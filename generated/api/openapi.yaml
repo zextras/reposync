@@ -6,17 +6,7 @@ info:
 servers:
 - url: /
 paths:
-  /health:
-    get:
-      responses:
-        "204":
-          description: Empty response when everything is ok.
-        "503":
-          description: Service unavailable when service has known issues, such as
-            a full disk.
-      summary: simple health-check
-    summary: simple healthcheck
-  /repo/{repo}/:
+  /repository/{repo}/:
     get:
       description: Return a full status of the repository.
       parameters:
@@ -42,7 +32,7 @@ paths:
           description: Repository not found.
       summary: status of repository
     summary: Read status for the selected repository.
-  /repo/{repo}/sync:
+  /repository/{repo}/sync:
     post:
       description: Trigger an asynchronous synchronization for the repository.
       parameters:
@@ -68,6 +58,16 @@ paths:
           description: Repository not found.
       summary: Perform a synchronization
     summary: Queue a synchronization for the selected repository.
+  /health:
+    get:
+      responses:
+        "204":
+          description: Empty response when everything is ok.
+        "503":
+          description: Service unavailable when service has known issues, such as
+            a full disk.
+      summary: Simple health-check
+    summary: Simple health-check
 components:
   schemas:
     status:
@@ -79,6 +79,7 @@ components:
         last_sync: 1620045374
         last_result: ok
         size: 240873
+        packages: 96
       properties:
         name:
           description: Name of the repository, also work as UID
@@ -109,11 +110,15 @@ components:
           description: Current size of the repository, in bytes.
           format: int64
           type: integer
+        packages:
+          description: Number of packages in the last synchronization.
+          type: integer
       required:
       - last_result
       - last_sync
       - name
       - next_sync
+      - packages
       - size
       - status
       title: Root Type for status

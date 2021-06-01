@@ -1,13 +1,9 @@
-use data_encoding::{BASE32_NOPAD, BASE64_NOPAD};
+use data_encoding::BASE64_NOPAD;
 #[cfg(test)]
 use mockall::automock;
 use reqwest::blocking::Client;
 use reqwest::{header, StatusCode};
-use std::fs;
-use std::fs::File;
-use std::io;
 use std::io::Read;
-use std::sync::Arc;
 use std::thread::sleep;
 use std::time::Duration;
 
@@ -24,17 +20,17 @@ pub trait Fetcher {
 
 struct RetryFetcher {
     fetcher: Box<dyn Fetcher>,
-    retries: u8,
-    sleep_ms: u64,
+    max_retries: u32,
+    retry_sleep: Duration,
 }
 
 impl Fetcher for RetryFetcher {
     fn fetch(&self, url: &str) -> Result<Box<dyn Read>, FetchError> {
         let mut err: Option<FetchError> = None;
-        for n in 0..self.retries {
+        for n in 0..self.max_retries {
             if n > 0 {
-                sleep(Duration::from_millis(self.sleep_ms));
-                println!("Failed, retrying in {}ms...", self.sleep_ms);
+                sleep(self.retry_sleep);
+                println!("Failed, retrying in {}s...", self.retry_sleep.as_secs());
             }
             let result = self.fetcher.fetch(url);
             if result.is_ok() {
@@ -49,6 +45,7 @@ impl Fetcher for RetryFetcher {
 struct DirectFetcher {
     username: Option<String>,
     password: Option<String>,
+    timeout: Duration,
 }
 impl Fetcher for DirectFetcher {
     fn fetch(&self, url: &str) -> Result<Box<dyn Read>, FetchError> {
@@ -72,6 +69,7 @@ impl Fetcher for DirectFetcher {
         }
         let client = builder
             .default_headers(headers)
+            .timeout(self.timeout)
             .build()
             .expect("cannot create http client");
 
@@ -100,31 +98,29 @@ impl Fetcher for DirectFetcher {
 }
 
 pub fn create_chain(
-    retries: u8,
-    sleep_ms: u64,
+    max_retries: u32,
+    retry_sleep: Duration,
     username: Option<String>,
     password: Option<String>,
+    timeout: Duration,
 ) -> Result<Box<dyn Fetcher>, std::io::Error> {
     Ok(Box::new(RetryFetcher {
-        retries,
-        sleep_ms,
-        fetcher: Box::new(DirectFetcher { username, password }),
+        max_retries,
+        retry_sleep,
+        fetcher: Box::new(DirectFetcher {
+            username,
+            password,
+            timeout,
+        }),
     }))
 }
 
 #[cfg(test)]
 pub mod test {
-    use crate::fetcher::{DirectFetcher, FetchError, Fetcher, MockFetcher, RetryFetcher};
+    use crate::fetcher::{FetchError, Fetcher, MockFetcher, RetryFetcher};
     use mockall::predicate;
-    use mockall::predicate::*;
-    use mockall::*;
-    use std::borrow::BorrowMut;
-    use std::cell::RefCell;
-    use std::fs;
-    use std::io::{Cursor, Read};
-    use std::rc::Rc;
-    use std::sync::atomic::{AtomicU8, Ordering};
-    use std::sync::{Arc, Mutex};
+    use std::io::Read;
+    use std::time::Duration;
 
     #[test]
     fn retry_fail() {
@@ -140,15 +136,12 @@ pub mod test {
                 })
             });
 
-        let tmp_dir = tempfile::tempdir().unwrap();
-
-        let mut fetcher = RetryFetcher {
+        let fetcher = RetryFetcher {
             fetcher: Box::new(mock),
-            retries: 3,
-            sleep_ms: 0,
+            max_retries: 3,
+            retry_sleep: Duration::from_millis(0),
         };
 
-        let mut text = String::new();
         let result = fetcher.fetch("https://url");
         assert!(result.is_err());
     }
@@ -162,18 +155,15 @@ pub mod test {
             .times(1)
             .returning(|_| Result::Ok(Box::new("hello".as_bytes())));
 
-        let tmp_dir = tempfile::tempdir().unwrap();
-
-        let mut fetcher = RetryFetcher {
+        let fetcher = RetryFetcher {
             fetcher: Box::new(mock),
-            retries: 3,
-            sleep_ms: 1,
+            max_retries: 3,
+            retry_sleep: Duration::from_millis(0),
         };
 
-        let mut text = String::new();
         let mut reader = fetcher.fetch("https://url").unwrap();
         let mut content = String::new();
-        reader.read_to_string(&mut content);
+        reader.read_to_string(&mut content).unwrap();
 
         assert_eq!("hello", content);
     }

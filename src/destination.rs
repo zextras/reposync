@@ -1,6 +1,5 @@
 use bytes::Bytes;
 use futures::future::Future;
-use futures::io::AllowStdIo;
 use futures::stream::Stream;
 use rusoto_cloudfront::{
     CloudFront, CloudFrontClient, CreateInvalidationRequest, InvalidationBatch, Paths,
@@ -8,15 +7,10 @@ use rusoto_cloudfront::{
 use rusoto_core::credential::StaticProvider;
 use rusoto_core::{region, HttpClient, Region};
 use rusoto_s3::{DeleteObjectRequest, PutObjectRequest, S3Client, StreamingBody, S3};
-use std::borrow::Borrow;
-use std::collections::{BTreeMap, BTreeSet};
 use std::fs::File;
 use std::io::{Error, ErrorKind, Read};
 use std::pin::Pin;
-use std::sync::Arc;
 use std::task::{Context, Poll};
-use std::time::Duration;
-use tokio::runtime::Runtime;
 
 pub trait Destination {
     fn upload(&mut self, path: &str, file: File) -> Result<(), std::io::Error>;
@@ -220,13 +214,17 @@ impl Stream for FileAdapter {
     }
 }
 
+#[cfg(test)]
+use std::collections::{BTreeMap, BTreeSet};
+
+#[cfg(test)]
 pub struct MemoryDestination {
     path: String,
     map: BTreeMap<String, Vec<u8>>,
     delete_set: BTreeSet<String>,
     invalidation_set: BTreeSet<String>,
 }
-
+#[cfg(test)]
 impl MemoryDestination {
     pub fn new(path: &str) -> Self {
         Self {
@@ -262,6 +260,7 @@ impl MemoryDestination {
     }
 }
 
+#[cfg(test)]
 impl Destination for MemoryDestination {
     fn upload(&mut self, path: &str, mut file: File) -> Result<(), Error> {
         let mut vec = Vec::new();
@@ -272,14 +271,14 @@ impl Destination for MemoryDestination {
 
     fn delete(&mut self, path: &str) -> Result<(), Error> {
         self.delete_set.insert(path.into());
-        Ok((()))
+        Ok(())
     }
 
     fn invalidate(&mut self, paths: Vec<String>) -> Result<(), Error> {
         paths.iter().for_each(|x| {
             self.invalidation_set.insert(x.clone());
         });
-        Ok((()))
+        Ok(())
     }
 
     fn name(&self) -> String {

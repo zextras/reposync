@@ -2,14 +2,17 @@
 general:
   data_path: "/data/repo/"
   tmp_path: "/tmp/repo/"
+  bind_address: "127.0.0.1:8080"
   timeout: 60
-  debounce: 120
-  auto_align: 3600
+  max_retries: 3
+  retry_sleep: 5
+  min_sync_delay: 5
+  max_sync_delay: 30
 repo:
   - name: centos8
     source:
+      kind: redhat
       endpoint: https://
-      kind: debian
       username: username
       password: password
       public_pgp_key: |
@@ -80,8 +83,8 @@ repo:
       - bionic
       - focal
     source:
-      endpoint: https://
       kind: debian
+      endpoint: https://
       username: username
       password: password
       public_pgp_key: |

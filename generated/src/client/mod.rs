@@ -37,8 +37,8 @@ const ID_ENCODE_SET: &AsciiSet = &FRAGMENT_ENCODE_SET.add(b'|');
 
 use crate::{Api,
      HealthGetResponse,
-     RepoRepoGetResponse,
-     RepoRepoSyncPostResponse
+     RepositoryRepoGetResponse,
+     RepositoryRepoSyncPostResponse
      };
 
 /// Convert input into a base path, e.g. "http://example:123". Also checks the scheme as it goes.
@@ -457,14 +457,14 @@ impl<S, C> Api<C> for Client<S, C> where
         }
     }
 
-    async fn repo_repo_get(
+    async fn repository_repo_get(
         &self,
         param_repo: String,
-        context: &C) -> Result<RepoRepoGetResponse, ApiError>
+        context: &C) -> Result<RepositoryRepoGetResponse, ApiError>
     {
         let mut client_service = self.client_service.clone();
         let mut uri = format!(
-            "{}/repo/{repo}/",
+            "{}/repository/{repo}/",
             self.base_path
             ,repo=utf8_percent_encode(&param_repo.to_string(), ID_ENCODE_SET)
         );
@@ -510,14 +510,14 @@ impl<S, C> Api<C> for Client<S, C> where
                 let body = str::from_utf8(&body)
                     .map_err(|e| ApiError(format!("Response was not valid UTF8: {}", e)))?;
                 let body = serde_json::from_str::<models::Status>(body)?;
-                Ok(RepoRepoGetResponse::TheStatusOfTheRepository
+                Ok(RepositoryRepoGetResponse::TheStatusOfTheRepository
                     (body)
                 )
             }
             404 => {
                 let body = response.into_body();
                 Ok(
-                    RepoRepoGetResponse::RepositoryNotFound
+                    RepositoryRepoGetResponse::RepositoryNotFound
                 )
             }
             code => {
@@ -540,14 +540,14 @@ impl<S, C> Api<C> for Client<S, C> where
         }
     }
 
-    async fn repo_repo_sync_post(
+    async fn repository_repo_sync_post(
         &self,
         param_repo: String,
-        context: &C) -> Result<RepoRepoSyncPostResponse, ApiError>
+        context: &C) -> Result<RepositoryRepoSyncPostResponse, ApiError>
     {
         let mut client_service = self.client_service.clone();
         let mut uri = format!(
-            "{}/repo/{repo}/sync",
+            "{}/repository/{repo}/sync",
             self.base_path
             ,repo=utf8_percent_encode(&param_repo.to_string(), ID_ENCODE_SET)
         );
@@ -593,14 +593,14 @@ impl<S, C> Api<C> for Client<S, C> where
                 let body = str::from_utf8(&body)
                     .map_err(|e| ApiError(format!("Response was not valid UTF8: {}", e)))?;
                 let body = serde_json::from_str::<models::Status>(body)?;
-                Ok(RepoRepoSyncPostResponse::TheSynchronizationHasBeenQueuedCorrectly
+                Ok(RepositoryRepoSyncPostResponse::TheSynchronizationHasBeenQueuedCorrectly
                     (body)
                 )
             }
             404 => {
                 let body = response.into_body();
                 Ok(
-                    RepoRepoSyncPostResponse::RepositoryNotFound
+                    RepositoryRepoSyncPostResponse::RepositoryNotFound
                 )
             }
             code => {

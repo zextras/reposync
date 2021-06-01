@@ -1,34 +1,13 @@
-/*
-https://rpm.releases.hashicorp.com/RHEL/8/x86_64/stable/repodata/repomd.xml
-
-primary.xml.gz Contains an XML file describing the primary metadata of each RPM archive.
-filelists.xml.gz Contains an XML file describing all the files contained within each RPM archive.
-other.xml.gz Contains an XML file describing miscellaneous information regarding each RPM archive.
-repomd.xml Contains information regarding all the other metadata files.
-
-16b72c920dbd5d48e8aceb383b4b74664eb079ba-other.xml.gz:
-<?xml version="1.0"?>
-<otherdata xmlns="http://linux.duke.edu/metadata/other" packages="1">
-  <package pkgid="f4b4281c08a8996ce337f09b1f6bcdb55e3a42ac" name="service-discover-base" arch="x86_64">
-    <version epoch="0" ver="1.9.2" rel="1.el7"/>
-  </package>
-</otherdata>
-
-2e1eb1fb69a2ca7fbd6d8723ce7d3cd91e9a9f13-primary.xml.gz:
-*/
-
 use crate::config::RepositoryConfig;
 use crate::fetcher::Fetcher;
 use crate::packages::{Collection, Hash, IndexFile, Package, Repository, Signature, Target};
 use crate::state::{LiveRepoMetadataStore, RepoMetadataStore, SavedRepoMetadataStore};
-use crate::utils;
 use crate::utils::add_optional_index;
 use flate2::read::GzDecoder;
 use std::io::{ErrorKind, Read};
 use std::rc::Rc;
 use std::str::FromStr;
 use xml::reader::{Events, XmlEvent};
-use xml::EventReader;
 
 pub fn load_repository(
     data_path: &str,
@@ -167,12 +146,10 @@ where
                 acc
             });
 
-    let mut repo = Repository {
+    Ok(Repository {
         name: config.name.clone(),
         collections: vec![collection],
-    };
-
-    Ok(repo)
+    })
 }
 
 #[derive(Debug, Eq, PartialEq, Clone)]
@@ -213,9 +190,7 @@ where
             break;
         }
         match event.unwrap() {
-            XmlEvent::StartElement {
-                name, attributes, ..
-            } => {
+            XmlEvent::StartElement { name, .. } => {
                 if name.local_name == "package" {
                     packages.push(parse_package(&mut iterator)?)
                 }
@@ -275,7 +250,7 @@ where
                                 format!("invalid size tag"),
                             ));
                         }
-                        let parsed = usize::from_str(size.unwrap());
+                        let parsed = u64::from_str(size.unwrap());
                         if parsed.is_err() {
                             return Result::Err(std::io::Error::new(
                                 ErrorKind::InvalidData,
