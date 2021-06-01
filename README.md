@@ -1,12 +1,9 @@
 # RepoSync
 
-This project allows to synchronize any debian/redhat repository to s3+cloudfront configuration.
+Keep any debian/redhat repository synchronized to an S3 bucket using only HTTP.
 ---
 
-# CLI
-
-
-## help
+## Help
 ```
 RepoSync 0.9
 Keep a repository synchronized to an S3 bucket
@@ -26,13 +23,13 @@ ARGS:
     <ACTION>         action to perform, 'check', 'sync' or 'server'
 ```
 
-## To check the configuration
+## Check the configuration
 ```
 $ reposync my-config.yaml check
 config file is correct
 ```
 
-## To synchronize a repository directly
+## Synchronize directly a repository
 ```
 $ reposync my-config.yaml sync --repo my-repo
 starting synchronization of my-repo
@@ -46,12 +43,12 @@ repo fully synchronized
 ```
 _You can use `all` to synchronize all repositories._
 
-## To run in server mode
+## Run in server mode
 ```
 $ reposync my-config.yaml server
 ```
 
-### Use the APIs
+### Call the APIs
 ```
 $ wget --method=POST http://localhost:8080/repository/my-repo/sync -q -O - | jq .
 {
@@ -65,7 +62,9 @@ $ wget --method=POST http://localhost:8080/repository/my-repo/sync -q -O - | jq 
 }
 ```
 
-# Configuration
+---
+
+## Config file
 ```
 ---
 general:
@@ -86,7 +85,7 @@ general:
 # refresh the repository every x minutes, even if not requested
   max_sync_delay: 30
 repo:
-# arbytrary name of the repository, expect 'all', which is reserved
+# arbytrary name of the repository, exept 'all', which is reserved
 # multiple repositories can be specified
   - name: my-redhat-repo
 # versions to fetch, only used for debian repositories
@@ -129,6 +128,7 @@ repo:
 
 Check the official [S3 AWS endpoints](https://docs.aws.amazon.com/general/latest/gr/s3.html), [CloudFront AWS endpoints](https://docs.aws.amazon.com/general/latest/gr/cf_region.html), or provide a custom url.
 
+---
 ## Build 
 To build just run:
  ```cargo build --release```
@@ -136,6 +136,6 @@ To build just run:
 ## API & OpenAPI
 `./update.sh` is used to generate the `reposync-lib` from the [openapi schema](generated/api/openapi.yaml).
  
-See generated [README](generated/README.md).
+See generated [README](generated/README.md) for a complete list of HTTP APIs.
 
 To edit APIs [ApiCurio](https://studio.apicur.io/) was used.
