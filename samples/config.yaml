@@ -74,7 +74,7 @@ repo:
       region_name: "custom"
       path: "/centos8/"
       cloudfront_endpoint: https://cloudfront.example.com/
-      cloudfront_arn: arn
+      cloudfront_distribution_id: id
       access_key_id: key
       access_key_secret: secret
   - name: ubuntu
@@ -146,7 +146,7 @@ repo:
       s3_bucket: "my-bucket"
       path: "/ubuntu/"
       cloudfront_endpoint: https://cloudfront.example.com/
-      cloudfront_arn: arn
+      cloudfront_distribution_id: id
       region_name: "my-region"
       access_key_id: key
       access_key_secret: secret

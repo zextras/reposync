@@ -1,4 +1,4 @@
-use crate::config::{Config, RepositoryConfig};
+use crate::config::{Config, DestinationConfig, RepositoryConfig};
 use crate::destination::{Destination, S3Destination};
 use crate::fetcher::Fetcher;
 use crate::locks::Lock;
@@ -40,6 +40,7 @@ struct CopyOperation {
     is_replace: bool,
     path: String,
     hash: Hash,
+    size: u64,
     local_file: Option<String>,
 }
 
@@ -127,8 +128,10 @@ impl SyncManager {
                     //negative time
                     let result = self.sync_repo(&name);
                     if let Err(err) = result {
+                        println!("failed to synchronize {}: {}", &name, &err.to_string());
                         self.sync_completed(&name, &err.to_string());
                     } else {
+                        println!("{} fully synchronized", &name);
                         self.sync_completed(&name, "successful");
                     }
                 }
@@ -296,27 +299,17 @@ impl SyncManager {
         let fetcher = fetcher::create_chain(
             self.config.general.max_retries,
             Duration::from_secs(self.config.general.retry_sleep),
-            repo_config.source.username.clone(),
-            repo_config.source.password.clone(),
+            repo_config
+                .source
+                .get_authorization_secret()
+                .expect("cannot read authorization secret"),
             Duration::from_secs(self.config.general.timeout as u64),
         )?;
-        let mut destination = S3Destination::new(
-            &repo_config.destination.path,
-            &repo_config.destination.s3_endpoint,
-            &repo_config.destination.s3_bucket,
-            repo_config.destination.cloudfront_endpoint.clone(),
-            repo_config.destination.cloudfront_arn.clone(),
-            &repo_config.destination.region_name,
-            &repo_config.destination.access_key_id,
-            &repo_config.destination.access_key_secret,
-        );
+
+        let mut destination = create_destination(&repo_config.destination);
 
         return if let Some(_lock) = self.lock.lock_sync(&repo_config.name) {
-            let result = self.sync_repo_internal(fetcher, &mut destination, repo_config);
-            if result.is_ok() {
-                println!("repo fully synchronized");
-            }
-            result
+            self.sync_repo_internal(fetcher, &mut destination, repo_config)
         } else {
             Result::Err(std::io::Error::new(
                 ErrorKind::WouldBlock,
@@ -373,7 +366,7 @@ impl SyncManager {
                 }
             }
         } else {
-            println!("skipping metadata signature validation")
+            println!("no public pgp key provided, skipping metadata signature validation")
         }
 
         let (current_repo, _) = self.load_current(repo_config)?;
@@ -384,6 +377,23 @@ impl SyncManager {
         if packages_copy_list.is_empty() && index_copy_list.is_empty() {
             return Ok(());
         }
+
+        println!(
+            "{} packages and {} indexes to copy or update for a total of {:.2} MB.",
+            packages_copy_list.len(),
+            index_copy_list.len(),
+            (packages_copy_list.iter().fold(0, |a, p| a + p.size)
+                + index_copy_list.iter().fold(0, |a, p| a + p.size)) as f64
+                / (1024f64 * 1024f64)
+        );
+
+        println!(
+            "{} packages and {} indexes to delete.",
+            packages_delete_list.len(),
+            index_delete_list.len()
+        );
+
+        println!("sync operation is atomic, either it's fully completed or will be performed from scratch");
 
         let mut invalidation_paths: Vec<String> = Vec::new();
         invalidation_paths.append(&mut SyncManager::copy(
@@ -493,7 +503,18 @@ impl SyncManager {
             if !operation.hash.matches(&mut tmp_file)? {
                 return Err(std::io::Error::new(
                     ErrorKind::InvalidData,
-                    format!("failed hash validation for {}", operation.path),
+                    format!("failed hash validation for '{}'", operation.path),
+                ));
+            }
+
+            let tmp_file_size = tmp_file.metadata()?.len();
+            if operation.size != tmp_file_size {
+                return Err(std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    format!(
+                        "invalid file size for '{}', expected {} found {}",
+                        operation.path, operation.size, tmp_file_size
+                    ),
                 ));
             }
 
@@ -562,6 +583,7 @@ impl SyncManager {
                                 hash: new_package.hash.clone(),
                                 is_replace: true,
                                 local_file: None,
+                                size: new_package.size,
                             }
                         } else {
                             CopyOperation {
@@ -569,6 +591,7 @@ impl SyncManager {
                                 hash: new_package.hash.clone(),
                                 is_replace: false,
                                 local_file: None,
+                                size: new_package.size,
                             }
                         }
                     })
@@ -619,6 +642,7 @@ impl SyncManager {
                                 hash: new_index.hash.clone(),
                                 is_replace: true,
                                 local_file: Some(new_index.file_path.clone()),
+                                size: new_index.size,
                             }
                         } else {
                             CopyOperation {
@@ -626,6 +650,7 @@ impl SyncManager {
                                 hash: new_index.hash.clone(),
                                 is_replace: false,
                                 local_file: Some(new_index.file_path.clone()),
+                                size: new_index.size,
                             }
                         }
                     })
@@ -652,6 +677,23 @@ impl SyncManager {
             index_delete_list,
         )
     }
+}
+
+fn create_destination(destination: &DestinationConfig) -> S3Destination {
+    let (access_key, access_key_secret) = destination
+        .get_aws_credentials()
+        .expect("cannot read aws cred, should be already validated");
+
+    S3Destination::new(
+        &destination.path,
+        &destination.s3_endpoint,
+        &destination.s3_bucket,
+        destination.cloudfront_endpoint.clone(),
+        destination.cloudfront_distribution_id.clone(),
+        &destination.region_name,
+        &access_key,
+        &access_key_secret,
+    )
 }
 
 #[cfg(test)]
@@ -687,16 +729,18 @@ pub mod tests {
                     public_pgp_key: None,
                     username: None,
                     password: None,
+                    authorization_file: None,
                 },
                 destination: DestinationConfig {
                     s3_endpoint: "".to_string(),
                     s3_bucket: "".to_string(),
-                    cloudfront_arn: None,
+                    cloudfront_distribution_id: None,
                     cloudfront_endpoint: None,
-                    access_key_id: "".to_string(),
-                    access_key_secret: "".to_string(),
+                    access_key_id: None,
+                    access_key_secret: None,
                     region_name: "".to_string(),
                     path: "ubuntu/".to_string(),
+                    aws_credential_file: None,
                 },
                 versions: vec!["focal".into()],
             }],
@@ -773,42 +817,42 @@ pub mod tests {
             contents.get("ubuntu/dists/focal/InRelease").unwrap().len()
         );
         assert_eq!(
-            1085,
+            1075,
             contents
                 .get("ubuntu/dists/focal/main/binary-amd64/Packages")
                 .unwrap()
                 .len()
         );
         assert_eq!(
-            1085,
+            1075,
             contents
                 .get("ubuntu/dists/focal/main/binary-amd64/Packages.bz2")
                 .unwrap()
                 .len()
         );
         assert_eq!(
-            1085,
+            1075,
             contents
                 .get("ubuntu/dists/focal/main/binary-amd64/Packages.gz")
                 .unwrap()
                 .len()
         );
         assert_eq!(
-            1085,
+            1075,
             contents
                 .get("ubuntu/dists/focal/main/binary-i386/Packages")
                 .unwrap()
                 .len()
         );
         assert_eq!(
-            1085,
+            1075,
             contents
                 .get("ubuntu/dists/focal/main/binary-i386/Packages.bz2")
                 .unwrap()
                 .len()
         );
         assert_eq!(
-            1085,
+            1075,
             contents
                 .get("ubuntu/dists/focal/main/binary-i386/Packages.gz")
                 .unwrap()
@@ -848,17 +892,17 @@ pub mod tests {
         let (contents, deletions, invalidations) = destination.explode();
         assert_eq!(8, contents.len());
         assert_eq!(1, deletions.len());
-        assert!(deletions.contains("pool/service-discover-agent_0.1.0_amd64.deb"));
+        assert!(deletions.contains("ubuntu/pool/service-discover-agent_0.1.0_amd64.deb"));
         assert_eq!(8, invalidations.len());
-        assert!(invalidations.contains("dists/focal/Release"));
-        assert!(!invalidations.contains("dists/focal/Release.gpg"));
-        assert!(invalidations.contains("dists/focal/InRelease"));
-        assert!(invalidations.contains("dists/focal/main/binary-amd64/Packages"));
-        assert!(invalidations.contains("dists/focal/main/binary-amd64/Packages.gz"));
-        assert!(invalidations.contains("dists/focal/main/binary-amd64/Packages.bz2"));
-        assert!(invalidations.contains("dists/focal/main/binary-i386/Packages"));
-        assert!(invalidations.contains("dists/focal/main/binary-i386/Packages.gz"));
-        assert!(invalidations.contains("dists/focal/main/binary-i386/Packages.bz2"));
+        assert!(invalidations.contains("ubuntu/dists/focal/Release"));
+        assert!(!invalidations.contains("ubuntu/dists/focal/Release.gpg"));
+        assert!(invalidations.contains("ubuntu/dists/focal/InRelease"));
+        assert!(invalidations.contains("ubuntu/dists/focal/main/binary-amd64/Packages"));
+        assert!(invalidations.contains("ubuntu/dists/focal/main/binary-amd64/Packages.gz"));
+        assert!(invalidations.contains("ubuntu/dists/focal/main/binary-amd64/Packages.bz2"));
+        assert!(invalidations.contains("ubuntu/dists/focal/main/binary-i386/Packages"));
+        assert!(invalidations.contains("ubuntu/dists/focal/main/binary-i386/Packages.gz"));
+        assert!(invalidations.contains("ubuntu/dists/focal/main/binary-i386/Packages.bz2"));
     }
 
     fn setup_fetcher(mock_fetcher: &mut MockFetcher, release: &str, packages: &str) {

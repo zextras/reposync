@@ -23,7 +23,10 @@ impl Hash {
         match self {
             Hash::Sha1 { hex } => Hash::verify(reader, Sha1::new(), hex),
             Hash::Sha256 { hex } => Hash::verify(reader, Sha256::new(), hex),
-            Hash::None => Ok(true),
+            Hash::None => {
+                //just a safeguard against bugs
+                panic!("file has an empty hash!")
+            }
         }
     }
 
@@ -47,6 +50,24 @@ impl Hash {
 
         let hash = HEXLOWER_PERMISSIVE.encode(hasher.finalize_fixed().as_slice());
         Ok(hash == expected_hash)
+    }
+
+    pub fn create_sha256_hash<T>(reader: &mut T) -> Result<Hash, std::io::Error>
+    where
+        T: Read,
+    {
+        let mut hasher = Sha256::new();
+        let mut buffer: [u8; 4096] = [0u8; 4096];
+        loop {
+            let size = reader.read(&mut buffer)?;
+            if size == 0 {
+                break;
+            }
+            Digest::update(&mut hasher, &buffer[0..size]);
+        }
+        Ok(Hash::Sha256 {
+            hex: HEXLOWER_PERMISSIVE.encode(hasher.finalize_fixed().as_slice()),
+        })
     }
 }
 
@@ -195,7 +216,13 @@ pub struct IndexFile {
 
 impl IndexFile {
     pub fn same_content(&self, other: &IndexFile) -> bool {
-        self.path == other.path && self.size == other.size && self.hash == other.hash
+        let same = self.path == other.path && self.size == other.size && self.hash == other.hash;
+        if same && self.hash == Hash::None {
+            //actual file content may differ
+            panic!("no index should be without a proper hash")
+        } else {
+            same
+        }
     }
 }
 

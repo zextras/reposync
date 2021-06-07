@@ -80,13 +80,11 @@ fn main() {
                 let sync_manager = SyncManager::new(config);
                 for repo_name in repo_names {
                     let result = sync_manager.sync_repo(&repo_name);
-                    if result.is_err() {
-                        println!(
-                            "failed to synchronize: {}",
-                            result.err().unwrap().to_string()
-                        );
+                    if let Err(err) = result {
+                        println!("failed to synchronize {}: {}", repo_name, err.to_string());
                         exit(1);
                     }
+                    println!("{} fully synchronized", repo_name);
                 }
                 exit(0);
             } else {

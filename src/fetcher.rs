@@ -1,4 +1,4 @@
-use data_encoding::BASE64_NOPAD;
+use data_encoding::BASE64;
 #[cfg(test)]
 use mockall::automock;
 use reqwest::blocking::Client;
@@ -36,15 +36,19 @@ impl Fetcher for RetryFetcher {
             if result.is_ok() {
                 return result;
             }
-            err = Some(result.err().unwrap());
+            let tmp_err = result.err().unwrap();
+            //no need to retry 404
+            if tmp_err.code == 404 {
+                return Err(tmp_err);
+            }
+            err = Some(tmp_err);
         }
         Err(err.unwrap())
     }
 }
 
 struct DirectFetcher {
-    username: Option<String>,
-    password: Option<String>,
+    secret: Option<String>,
     timeout: Duration,
 }
 impl Fetcher for DirectFetcher {
@@ -52,17 +56,11 @@ impl Fetcher for DirectFetcher {
         println!("requesting: {}", url);
         let builder = Client::builder();
         let mut headers = header::HeaderMap::new();
-        if self.username.is_some() && self.password.is_some() {
-            let mut auth_value = header::HeaderValue::from_str(
-                &BASE64_NOPAD.encode(
-                    format!(
-                        "Basic {}:{}",
-                        &self.username.clone().unwrap(),
-                        &self.password.clone().unwrap()
-                    )
-                    .as_bytes(),
-                ),
-            )
+        if self.secret.is_some() {
+            let mut auth_value = header::HeaderValue::from_str(&format!(
+                "Basic {}",
+                BASE64.encode(self.secret.clone().unwrap().as_bytes(),)
+            ))
             .expect("cannot crate authorization header");
             auth_value.set_sensitive(true);
             headers.insert(header::AUTHORIZATION, auth_value);
@@ -81,7 +79,7 @@ impl Fetcher for DirectFetcher {
             } else {
                 Result::Err(FetchError {
                     code: response.status().as_u16(),
-                    error: format!("Request failed: {}", response.status().to_string()),
+                    error: format!("request failed: {}", response.status().to_string()),
                 })
             }
         } else {
@@ -100,18 +98,13 @@ impl Fetcher for DirectFetcher {
 pub fn create_chain(
     max_retries: u32,
     retry_sleep: Duration,
-    username: Option<String>,
-    password: Option<String>,
+    secret: Option<String>,
     timeout: Duration,
 ) -> Result<Box<dyn Fetcher>, std::io::Error> {
     Ok(Box::new(RetryFetcher {
         max_retries,
         retry_sleep,
-        fetcher: Box::new(DirectFetcher {
-            username,
-            password,
-            timeout,
-        }),
+        fetcher: Box::new(DirectFetcher { secret, timeout }),
     }))
 }
 

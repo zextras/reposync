@@ -21,9 +21,9 @@ SHA1:
  64a543afbb5f4bf728636bdcbbe7a2ed0804adc2               14 main/binary-i386/Packages.bz2
  e03849ea786b9f7b28a35c17949e85a93eb1cff1               20 main/binary-i386/Packages.gz
 SHA256:
- 6db5a7a47b02f04f3bbaf39fbdc8e5599c55a082f55270a45ff1a57a43a398a5             1085 main/binary-amd64/Packages
- 6db5a7a47b02f04f3bbaf39fbdc8e5599c55a082f55270a45ff1a57a43a398a5             1085 main/binary-amd64/Packages.bz2
- 6db5a7a47b02f04f3bbaf39fbdc8e5599c55a082f55270a45ff1a57a43a398a5             1085 main/binary-amd64/Packages.gz
- 6db5a7a47b02f04f3bbaf39fbdc8e5599c55a082f55270a45ff1a57a43a398a5             1085 main/binary-i386/Packages
- 6db5a7a47b02f04f3bbaf39fbdc8e5599c55a082f55270a45ff1a57a43a398a5             1085 main/binary-i386/Packages.bz2
- 6db5a7a47b02f04f3bbaf39fbdc8e5599c55a082f55270a45ff1a57a43a398a5             1085 main/binary-i386/Packages.gz
+ be3a9a6324e34de28e99dcba35b316264b05b6a41185441f41336a0ecc73052e             1075 main/binary-amd64/Packages
+ be3a9a6324e34de28e99dcba35b316264b05b6a41185441f41336a0ecc73052e             1075 main/binary-amd64/Packages.bz2
+ be3a9a6324e34de28e99dcba35b316264b05b6a41185441f41336a0ecc73052e             1075 main/binary-amd64/Packages.gz
+ be3a9a6324e34de28e99dcba35b316264b05b6a41185441f41336a0ecc73052e             1075 main/binary-i386/Packages
+ be3a9a6324e34de28e99dcba35b316264b05b6a41185441f41336a0ecc73052e             1075 main/binary-i386/Packages.bz2
+ be3a9a6324e34de28e99dcba35b316264b05b6a41185441f41336a0ecc73052e             1075 main/binary-i386/Packages.gz

@@ -20,17 +20,18 @@ where
             Err(err)
         }
     } else {
-        let (disk_path, reader, size) = result.unwrap();
+        let (disk_path, mut reader, size) = result.unwrap();
         indexes.insert(
             0,
             IndexFile {
                 file_path: disk_path,
                 path: path.into(),
                 size,
-                hash: Hash::None,
+                hash: Hash::create_sha256_hash(&mut reader)?,
                 signature,
             },
         );
-        Ok(Some(reader))
+
+        Ok(Some(state.read(path).unwrap().unwrap()))
     }
 }

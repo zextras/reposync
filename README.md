@@ -101,6 +101,8 @@ repo:
 # optional username & password
       username: username
       password: password
+# or authorization_file, expected format username:password
+      authorization_file: /run/secrets/http_authorization
 # optional public pgp key, to validate the signature
       public_pgp_key: |
         -----BEGIN PGP PUBLIC KEY BLOCK-----
@@ -116,11 +118,14 @@ repo:
 # path where to copy the repisotiry to
       path: "/centos8/"
 # optional cloudfront endpoint & ARN resource ID
-      cloudfront_endpoint: https://cloudfront.example.com/
-      cloudfront_arn: arn
+      cloudfront_endpoint: https://cloudfront.amazonaws.com/
+      cloudfront_distribution_id: id
 # AWS credentials
       access_key_id: key
       access_key_secret: secret
+# AWS credential file, expected format: {ACCESS_KEY_ID}\n{SECRET_ACCESS_KEY}
+      aws_credential_file: /run/secrets/aws_credential
+
 
 ```
 

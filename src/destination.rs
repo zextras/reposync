@@ -61,10 +61,18 @@ impl S3Destination {
             None,
             None,
         );
-        rusoto_s3::S3Client::new_with(request_dispatcher, credential_provider, self.region())
+        rusoto_s3::S3Client::new_with(
+            request_dispatcher,
+            credential_provider,
+            self.region(&self.region_name, &self.s3_endpoint),
+        )
     }
 
-    fn cloudfront_client(&mut self) -> CloudFrontClient {
+    fn cloudfront_client(&mut self) -> Option<CloudFrontClient> {
+        if self.cloudfront_arn.is_none() {
+            return None;
+        }
+
         let request_dispatcher = HttpClient::new().expect("failed to create request dispatcher");
         let credential_provider = StaticProvider::new(
             self.access_key_id.clone(),
@@ -72,17 +80,25 @@ impl S3Destination {
             None,
             None,
         );
-        rusoto_cloudfront::CloudFrontClient::new_with(
+        Some(rusoto_cloudfront::CloudFrontClient::new_with(
             request_dispatcher,
             credential_provider,
-            self.region(),
-        )
+            self.region("us-east-1", &self.cloudfront_endpoint.clone().unwrap()),
+        ))
     }
 
-    fn region(&self) -> Region {
+    fn region(&self, name: &str, endpoint: &str) -> Region {
         region::Region::Custom {
-            name: self.region_name.clone(),
-            endpoint: self.s3_endpoint.clone(),
+            name: name.into(),
+            endpoint: endpoint.into(),
+        }
+    }
+
+    fn s3_path(&self, path: &str) -> String {
+        if self.path.is_empty() {
+            path.into()
+        } else {
+            format!("{}/{}", &self.path, path)
         }
     }
 }
@@ -104,11 +120,13 @@ impl Destination for S3Destination {
 
         println!(
             "uploading {}/{}/{}",
-            &self.s3_endpoint, self.s3_bucket, path
+            &self.s3_endpoint,
+            self.s3_bucket,
+            &self.s3_path(path)
         );
         let result = await_for(client.put_object(PutObjectRequest {
             bucket: self.s3_bucket.clone(),
-            key: format!("{}/{}", &self.path, path),
+            key: self.s3_path(path),
             body: Some(body),
             content_length: len,
             ..Default::default()
@@ -117,7 +135,7 @@ impl Destination for S3Destination {
         if result.is_err() {
             return Err(std::io::Error::new(
                 ErrorKind::Other,
-                result.err().unwrap().to_string(),
+                format!("upload failed: {}", result.err().unwrap().to_string()),
             ));
         }
 
@@ -127,10 +145,15 @@ impl Destination for S3Destination {
     fn delete(&mut self, path: &str) -> Result<(), Error> {
         let client = self.s3_client();
 
-        println!("deleting {}/{}/{}", &self.s3_endpoint, self.s3_bucket, path);
+        println!(
+            "deleting {}/{}/{}",
+            &self.s3_endpoint,
+            self.s3_bucket,
+            self.s3_path(path)
+        );
         let future = client.delete_object(DeleteObjectRequest {
             bucket: self.s3_bucket.clone(),
-            key: path.into(),
+            key: self.s3_path(path),
             ..Default::default()
         });
 
@@ -138,7 +161,7 @@ impl Destination for S3Destination {
         if result.is_err() {
             return Err(std::io::Error::new(
                 ErrorKind::Other,
-                result.err().unwrap().to_string(),
+                format!("delete failed: {}", result.err().unwrap().to_string()),
             ));
         }
 
@@ -146,29 +169,41 @@ impl Destination for S3Destination {
     }
 
     fn invalidate(&mut self, paths: Vec<String>) -> Result<(), Error> {
-        if self.cloudfront_arn.is_some() {
-            let client = self.cloudfront_client();
-            for path in &paths {
-                println!("invalidating {}", path);
-            }
-            let future = client.create_invalidation(CreateInvalidationRequest {
-                distribution_id: self.cloudfront_arn.clone().unwrap(),
-                invalidation_batch: InvalidationBatch {
-                    //either empty or random
-                    caller_reference: "".to_string(),
-                    paths: Paths {
-                        quantity: paths.len() as i64,
-                        items: Some(paths),
+        if let Some(client) = self.cloudfront_client() {
+            if !paths.is_empty() {
+                for path in &paths {
+                    println!("invalidating {}", path);
+                }
+                let future = client.create_invalidation(CreateInvalidationRequest {
+                    distribution_id: self.cloudfront_arn.clone().unwrap(),
+                    invalidation_batch: InvalidationBatch {
+                        caller_reference: SystemTime::now()
+                            .duration_since(UNIX_EPOCH)
+                            .unwrap()
+                            .as_millis()
+                            .to_string(),
+                        paths: Paths {
+                            quantity: paths.len() as i64,
+                            items: Some(
+                                paths
+                                    .iter()
+                                    .map(|path| format!("/{}", self.s3_path(path)))
+                                    .collect::<Vec<String>>(),
+                            ),
+                        },
                     },
-                },
-            });
+                });
 
-            let result = await_for(future);
-            if result.is_err() {
-                return Err(std::io::Error::new(
-                    ErrorKind::Other,
-                    result.err().unwrap().to_string(),
-                ));
+                let result = await_for(future);
+                if result.is_err() {
+                    return Err(std::io::Error::new(
+                        ErrorKind::Other,
+                        format!(
+                            "cloudfront invalidation failed: {}",
+                            result.err().unwrap().to_string()
+                        ),
+                    ));
+                }
             }
         } else {
             for path in paths {
@@ -216,6 +251,7 @@ impl Stream for FileAdapter {
 
 #[cfg(test)]
 use std::collections::{BTreeMap, BTreeSet};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 #[cfg(test)]
 pub struct MemoryDestination {
@@ -270,13 +306,14 @@ impl Destination for MemoryDestination {
     }
 
     fn delete(&mut self, path: &str) -> Result<(), Error> {
-        self.delete_set.insert(path.into());
+        self.delete_set.insert(format!("{}/{}", &self.path, path));
         Ok(())
     }
 
     fn invalidate(&mut self, paths: Vec<String>) -> Result<(), Error> {
-        paths.iter().for_each(|x| {
-            self.invalidation_set.insert(x.clone());
+        paths.iter().for_each(|path| {
+            self.invalidation_set
+                .insert(format!("{}/{}", &self.path, path));
         });
         Ok(())
     }

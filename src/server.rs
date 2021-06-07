@@ -23,7 +23,9 @@ pub async fn create(sync_manager: SyncManager, addr: &str) -> hyper::Result<()> 
     let service = MakeAllowAllAuthenticator::new(service, "cosmo");
     let service = reposync_lib::server::context::MakeAddContext::<_, EmptyContext>::new(service);
 
-    hyper::server::Server::bind(&addr).serve(service).await
+    let server_future = hyper::server::Server::bind(&addr).serve(service);
+    println!("starting http server, listening on  {}", &addr);
+    server_future.await
 }
 
 #[derive(Clone)]

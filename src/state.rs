@@ -1,5 +1,6 @@
 use crate::fetcher::Fetcher;
 use data_encoding::BASE32_NOPAD;
+use std::fs;
 use std::fs::File;
 use std::io::{Error, ErrorKind, Read};
 use std::rc::Rc;
@@ -38,26 +39,39 @@ impl RepoMetadataStore for SavedRepoMetadataStore {
 
 pub struct LiveRepoMetadataStore {
     repo_base_url: String,
-    directory: String,
+    tmp_directory: String,
     fetcher: Rc<dyn Fetcher>,
 }
 
 impl LiveRepoMetadataStore {
-    pub fn new(repo_base_url: &str, directory: &str, fetcher: Rc<dyn Fetcher>) -> Self {
-        LiveRepoMetadataStore {
-            repo_base_url: repo_base_url.into(),
-            directory: directory.into(),
-            fetcher,
+    pub fn new(
+        repo_base_url: &str,
+        tmp_directory: &str,
+        fetcher: Rc<dyn Fetcher>,
+    ) -> Result<Self, std::io::Error> {
+        //just a safeguard in case something goes wrong
+        //the directory should be {repo_name}_tmp
+        if !tmp_directory.contains("tmp") {
+            panic!("bug: abort before removing directory '{}'", tmp_directory);
         }
+        if File::open(tmp_directory).is_ok() {
+            fs::remove_dir_all(tmp_directory)?;
+        }
+
+        Ok(LiveRepoMetadataStore {
+            repo_base_url: repo_base_url.into(),
+            tmp_directory: tmp_directory.into(),
+            fetcher,
+        })
     }
 
     pub fn replace(&self, path: &str) -> Result<(), std::io::Error> {
-        let tmp_dir = &format!("{}_tmp", path);
+        let tmp_dir = &format!("{}__", path);
         let existed = File::open(path).is_ok();
         if existed {
             std::fs::rename(&path, tmp_dir)?;
         }
-        std::fs::rename(&self.directory, path)?;
+        std::fs::rename(&self.tmp_directory, path)?;
         if existed {
             std::fs::remove_dir_all(tmp_dir)?;
         }
@@ -69,9 +83,9 @@ impl LiveRepoMetadataStore {
 impl RepoMetadataStore for LiveRepoMetadataStore {
     fn fetch(&self, path: &str) -> Result<(String, Box<dyn Read>, u64), std::io::Error> {
         let base32 = BASE32_NOPAD.encode(path.as_bytes());
-        let file_path = format!("{}/{}", self.directory, base32);
+        let file_path = format!("{}/{}", self.tmp_directory, base32);
 
-        std::fs::create_dir_all(&self.directory)?;
+        std::fs::create_dir_all(&self.tmp_directory)?;
 
         let fetch_result = self
             .fetcher
@@ -87,7 +101,7 @@ impl RepoMetadataStore for LiveRepoMetadataStore {
             }
             return Err(std::io::Error::new(
                 ErrorKind::Other,
-                format!("cannot open file '{}': {}", path, err.error),
+                format!("cannot fetch file '{}': {}", path, err.error),
             ));
         }
 
@@ -102,7 +116,7 @@ impl RepoMetadataStore for LiveRepoMetadataStore {
 
     fn read(&self, path: &str) -> Result<Option<Box<dyn Read>>, std::io::Error> {
         let base32 = BASE32_NOPAD.encode(path.as_bytes());
-        let file = File::open(&format!("{}/{}", self.directory, base32));
+        let file = File::open(&format!("{}/{}", self.tmp_directory, base32));
         if let Ok(file) = file {
             Ok(Some(Box::new(file)))
         } else {

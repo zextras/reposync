@@ -1,7 +1,8 @@
 use pgp::{Deserializable, SignedPublicKey};
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::io::ErrorKind;
+use std::fs::File;
+use std::io::{Error, ErrorKind, Read};
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct SourceConfig {
@@ -10,9 +11,28 @@ pub struct SourceConfig {
     pub public_pgp_key: Option<String>,
     pub username: Option<String>,
     pub password: Option<String>,
+    pub authorization_file: Option<String>,
 }
 
 impl SourceConfig {
+    pub fn get_authorization_secret(&self) -> Result<Option<String>, std::io::Error> {
+        if self.username.is_some() && self.password.is_some() {
+            return Ok(Some(format!(
+                "{}:{}",
+                self.username.clone().unwrap(),
+                self.password.clone().unwrap()
+            )));
+        }
+
+        if self.authorization_file.is_some() {
+            let mut text = String::new();
+            File::open(&self.authorization_file.clone().unwrap())?.read_to_string(&mut text)?;
+            return Ok(Some(text.replace('\n', "").replace('\r', "")));
+        }
+
+        Ok(None)
+    }
+
     pub fn parse_public_key(&self) -> Result<Option<SignedPublicKey>, std::io::Error> {
         if self.public_pgp_key.is_some() {
             let result = SignedPublicKey::from_string(&self.public_pgp_key.clone().unwrap());
@@ -38,10 +58,54 @@ pub struct DestinationConfig {
     pub s3_bucket: String,
     pub path: String,
     pub cloudfront_endpoint: Option<String>,
-    pub cloudfront_arn: Option<String>,
+    pub cloudfront_distribution_id: Option<String>,
     pub region_name: String,
-    pub access_key_id: String,
-    pub access_key_secret: String,
+    pub access_key_id: Option<String>,
+    pub access_key_secret: Option<String>,
+    pub aws_credential_file: Option<String>,
+}
+
+impl DestinationConfig {
+    ///returns (access_key_id,access_key_secret)
+    pub fn get_aws_credentials(&self) -> Result<(String, String), std::io::Error> {
+        if self.access_key_id.is_some() && self.access_key_secret.is_some() {
+            Ok((
+                self.access_key_id.clone().unwrap(),
+                self.access_key_secret.clone().unwrap(),
+            ))
+        } else {
+            if self.aws_credential_file.is_some() {
+                let mut text = String::new();
+                File::open(&self.aws_credential_file.clone().unwrap())?
+                    .read_to_string(&mut text)?;
+                let vec: Vec<&str> = text.splitn(2, "\n").collect();
+                if vec.len() == 2 {
+                    Ok((
+                        vec.get(0)
+                            .unwrap()
+                            .to_string()
+                            .replace('\n', "")
+                            .replace('\r', ""),
+                        vec.get(1)
+                            .unwrap()
+                            .to_string()
+                            .replace('\n', "")
+                            .replace('\r', ""),
+                    ))
+                } else {
+                    Err(Error::new(
+                        ErrorKind::InvalidInput,
+                        "invalid aws credential file, expected: \"access_key_id\naccess_key_secret\"",
+                    ))
+                }
+            } else {
+                Err(Error::new(
+                    ErrorKind::InvalidInput,
+                    "missing aws credential",
+                ))
+            }
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -90,14 +154,15 @@ pub fn load_config(path: &str) -> Result<Config, String> {
         ));
     }
 
-    //normalize ending slash
+    //normalize slashes
     let mut config: Config = config_result.unwrap();
     for repo in &mut config.repo {
-        repo.source.endpoint = normalize(&repo.source.endpoint);
-        repo.destination.s3_endpoint = normalize(&repo.destination.s3_endpoint);
-        repo.destination.path = normalize(&repo.destination.path);
+        repo.source.endpoint = remove_trailing_slash(&repo.source.endpoint);
+        repo.destination.s3_endpoint = remove_trailing_slash(&repo.destination.s3_endpoint);
+        repo.destination.path =
+            remove_initial_slash(&remove_trailing_slash(&repo.destination.path));
         if repo.destination.cloudfront_endpoint.is_some() {
-            repo.destination.cloudfront_endpoint = Some(normalize(
+            repo.destination.cloudfront_endpoint = Some(remove_trailing_slash(
                 &repo.destination.cloudfront_endpoint.clone().unwrap(),
             ));
         }
@@ -125,6 +190,11 @@ pub fn load_config(path: &str) -> Result<Config, String> {
                 &repo.source.kind
             ));
         }
+
+        if let Err(err) = repo.source.get_authorization_secret() {
+            return Result::Err(format!("cannot parse authorization: {}", err.to_string()));
+        }
+
         let result = repo.source.parse_public_key();
         if result.is_err() {
             return Result::Err(result.err().unwrap().to_string());
@@ -138,12 +208,24 @@ pub fn load_config(path: &str) -> Result<Config, String> {
                 ));
             }
         }
+
+        if let Err(err) = repo.destination.get_aws_credentials() {
+            return Err(format!("cannot read aws credential: {}", err.to_string()));
+        }
     }
 
     Result::Ok(config)
 }
 
-fn normalize(s: &str) -> String {
+fn remove_initial_slash(s: &str) -> String {
+    if s.starts_with("/") {
+        let len = s.len();
+        s[1..len].into()
+    } else {
+        s.into()
+    }
+}
+fn remove_trailing_slash(s: &str) -> String {
     if s.ends_with("/") {
         let len = s.len();
         s[0..len - 1].into()
@@ -180,6 +262,7 @@ pub mod tests {
             public_pgp_key: Some(public_key_text),
             username: None,
             password: None,
+            authorization_file: None,
         };
 
         source_config.parse_public_key().unwrap().unwrap();

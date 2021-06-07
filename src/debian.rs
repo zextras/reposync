@@ -28,7 +28,7 @@ pub fn fetch_repository(
     tmp_path: &str,
     config: &RepositoryConfig,
 ) -> Result<(Repository, LiveRepoMetadataStore), std::io::Error> {
-    let repo_metadata = LiveRepoMetadataStore::new(&config.source.endpoint, tmp_path, fetcher);
+    let repo_metadata = LiveRepoMetadataStore::new(&config.source.endpoint, tmp_path, fetcher)?;
     let result = fetch_repository_internal(&repo_metadata, config, false);
     if let Err(err) = result {
         return Err(std::io::Error::new(
@@ -106,6 +106,7 @@ where
             Signature::None,
         )?;
 
+        let mut reader = state.read(&path)?.unwrap();
         if signature.is_some() {
             let mut text_signature = String::new();
             signature.unwrap().read_to_string(&mut text_signature)?;
@@ -115,7 +116,7 @@ where
                     file_path: disk_path,
                     path,
                     size,
-                    hash: Hash::None,
+                    hash: Hash::create_sha256_hash(&mut reader)?,
                     signature: Signature::PGPExternal {
                         signature: text_signature,
                     },
@@ -128,7 +129,7 @@ where
                     file_path: disk_path,
                     path,
                     size,
-                    hash: Hash::None,
+                    hash: Hash::create_sha256_hash(&mut reader)?,
                     signature: Signature::None,
                 },
             );
@@ -399,7 +400,8 @@ pub mod tests {
             "http://fake-url/rc",
             tmp_dir.path().to_str().unwrap(),
             Rc::new(mock_fetcher),
-        );
+        )
+        .unwrap();
 
         let repository = fetch_repository_internal(
             &state,
@@ -411,15 +413,17 @@ pub mod tests {
                     public_pgp_key: None,
                     username: None,
                     password: None,
+                    authorization_file: None,
                 },
                 destination: DestinationConfig {
                     s3_endpoint: "".to_string(),
                     cloudfront_endpoint: None,
                     s3_bucket: "".to_string(),
-                    cloudfront_arn: None,
+                    cloudfront_distribution_id: None,
                     region_name: "".to_string(),
-                    access_key_id: "".to_string(),
-                    access_key_secret: "".to_string(),
+                    access_key_id: None,
+                    access_key_secret: None,
+                    aws_credential_file: None,
                     path: "".to_string(),
                 },
                 versions: vec!["focal".into()],
@@ -461,9 +465,9 @@ pub mod tests {
                 IndexFile {
                     file_path: String::new(),
                     path: "dists/fake-distro/main/binary-amd64/Packages".to_string(),
-                    size: 1085,
+                    size: 1075,
                     hash: Hash::Sha256 {
-                        hex: "6db5a7a47b02f04f3bbaf39fbdc8e5599c55a082f55270a45ff1a57a43a398a5"
+                        hex: "be3a9a6324e34de28e99dcba35b316264b05b6a41185441f41336a0ecc73052e"
                             .into()
                     },
                     signature: Signature::None,
@@ -471,9 +475,9 @@ pub mod tests {
                 IndexFile {
                     file_path: String::new(),
                     path: "dists/fake-distro/main/binary-amd64/Packages.bz2".to_string(),
-                    size: 1085,
+                    size: 1075,
                     hash: Hash::Sha256 {
-                        hex: "6db5a7a47b02f04f3bbaf39fbdc8e5599c55a082f55270a45ff1a57a43a398a5"
+                        hex: "be3a9a6324e34de28e99dcba35b316264b05b6a41185441f41336a0ecc73052e"
                             .into()
                     },
                     signature: Signature::None,
@@ -481,9 +485,9 @@ pub mod tests {
                 IndexFile {
                     file_path: String::new(),
                     path: "dists/fake-distro/main/binary-amd64/Packages.gz".to_string(),
-                    size: 1085,
+                    size: 1075,
                     hash: Hash::Sha256 {
-                        hex: "6db5a7a47b02f04f3bbaf39fbdc8e5599c55a082f55270a45ff1a57a43a398a5"
+                        hex: "be3a9a6324e34de28e99dcba35b316264b05b6a41185441f41336a0ecc73052e"
                             .into()
                     },
                     signature: Signature::None,
@@ -491,9 +495,9 @@ pub mod tests {
                 IndexFile {
                     file_path: String::new(),
                     path: "dists/fake-distro/main/binary-i386/Packages".to_string(),
-                    size: 1085,
+                    size: 1075,
                     hash: Hash::Sha256 {
-                        hex: "6db5a7a47b02f04f3bbaf39fbdc8e5599c55a082f55270a45ff1a57a43a398a5"
+                        hex: "be3a9a6324e34de28e99dcba35b316264b05b6a41185441f41336a0ecc73052e"
                             .into()
                     },
                     signature: Signature::None,
@@ -501,9 +505,9 @@ pub mod tests {
                 IndexFile {
                     file_path: String::new(),
                     path: "dists/fake-distro/main/binary-i386/Packages.bz2".to_string(),
-                    size: 1085,
+                    size: 1075,
                     hash: Hash::Sha256 {
-                        hex: "6db5a7a47b02f04f3bbaf39fbdc8e5599c55a082f55270a45ff1a57a43a398a5"
+                        hex: "be3a9a6324e34de28e99dcba35b316264b05b6a41185441f41336a0ecc73052e"
                             .into()
                     },
                     signature: Signature::None,
@@ -511,9 +515,9 @@ pub mod tests {
                 IndexFile {
                     file_path: String::new(),
                     path: "dists/fake-distro/main/binary-i386/Packages.gz".to_string(),
-                    size: 1085,
+                    size: 1075,
                     hash: Hash::Sha256 {
-                        hex: "6db5a7a47b02f04f3bbaf39fbdc8e5599c55a082f55270a45ff1a57a43a398a5"
+                        hex: "be3a9a6324e34de28e99dcba35b316264b05b6a41185441f41336a0ecc73052e"
                             .into()
                     },
                     signature: Signature::None,
@@ -538,7 +542,7 @@ pub mod tests {
                         hex: "9ed5e5312df1aa047aa64799960b281e56b724bbbb457b5114bde9a829f17af2"
                             .into()
                     },
-                    size: 2702470,
+                    size: 20,
                 },
                 Package {
                     name: "service-discover-agent".to_string(),
@@ -549,7 +553,7 @@ pub mod tests {
                         hex: "9ed5e5312df1aa047aa64799960b281e56b724bbbb457b5114bde9a829f17af2"
                             .into()
                     },
-                    size: 1918012
+                    size: 20
                 }
             ],
             packages,

@@ -8,9 +8,8 @@ pipeline {
     environment {
         BASE_URL="registry.dev.zextras.com/infra/"
         IMAGE_NAME="reposync"
-        IMAGE_VERSION="latest"
         DOCKER_ARGS="--no-cache ."
-        BUILD_DOCKER_NAME=BUILD_TAG.replaceAll(" ", "-").replaceAll("%2", "-").toLowerCase()
+        IMAGE_VERSION="${TAG_NAME}"
     }
     options {
         buildDiscarder(logRotator(numToKeepStr: '20'))
@@ -37,7 +36,7 @@ pipeline {
                         sh 'cp -a target/release/reposync deployment/'
                         dir('deployment') {
                             script {
-                                buildImage = docker.build("${BASE_URL}${IMAGE_NAME}:${BUILD_DOCKER_NAME}", env.DOCKER_ARGS)
+                                buildImage = docker.build("${BASE_URL}${IMAGE_NAME}:${IMAGE_VERSION}", env.DOCKER_ARGS)
                             }
                         }
                     }

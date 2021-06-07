@@ -31,7 +31,7 @@ pub fn fetch_repository(
     tmp_path: &str,
     config: &RepositoryConfig,
 ) -> Result<(Repository, LiveRepoMetadataStore), std::io::Error> {
-    let repo_metadata = LiveRepoMetadataStore::new(&config.source.endpoint, tmp_path, fetcher);
+    let repo_metadata = LiveRepoMetadataStore::new(&config.source.endpoint, tmp_path, fetcher)?;
     let result = fetch_repository_internal(&repo_metadata, config);
     if result.is_err() {
         let err = result.err().unwrap();
@@ -85,6 +85,8 @@ where
         &mut collection.indexes,
         Signature::None,
     )?;
+
+    let mut reader = state.read(&repo_mod_path)?.unwrap();
     if signature.is_some() {
         let mut text_signature = String::new();
         signature.unwrap().read_to_string(&mut text_signature)?;
@@ -92,7 +94,7 @@ where
             file_path: disk_path,
             path: repo_mod_path.into(),
             size,
-            hash: Hash::None,
+            hash: Hash::create_sha256_hash(&mut reader)?,
             signature: Signature::PGPExternal {
                 signature: text_signature,
             },
@@ -102,7 +104,7 @@ where
             file_path: disk_path,
             path: repo_mod_path.into(),
             size,
-            hash: Hash::None,
+            hash: Hash::create_sha256_hash(&mut reader)?,
             signature: Signature::None,
         });
     }

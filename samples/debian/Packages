@@ -13,7 +13,7 @@ Description: Service discover daemon
 Filename: pool/service-discover-daemon_0.1.0_amd64.deb
 SHA1: 2df706d6f289ff3f198d75cd5dde13ad979c74e2
 SHA256: 9ed5e5312df1aa047aa64799960b281e56b724bbbb457b5114bde9a829f17af2
-Size: 2702470
+Size: 20
 
 Package: service-discover-agent
 Version: 0.1.0-0ubuntu1~
@@ -30,4 +30,4 @@ Description: Service discover agent cli
 Filename: pool/service-discover-agent_0.1.0_amd64.deb
 SHA1: 95d239a7d0a7175b032dda8b617c0648d5d20581
 SHA256: 9ed5e5312df1aa047aa64799960b281e56b724bbbb457b5114bde9a829f17af2
-Size: 1918012
+Size: 20
