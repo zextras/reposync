@@ -19,6 +19,70 @@ pub trait Destination {
     fn name(&self) -> String;
 }
 
+pub fn create_destination(
+    destination: &DestinationConfig,
+) -> Result<Box<dyn Destination>, std::io::Error> {
+    if destination.s3.is_some() {
+        let s3 = destination.s3.clone().unwrap();
+
+        let (access_key, access_key_secret) = s3
+            .get_aws_credentials()
+            .expect("cannot read aws cred, should be already validated");
+
+        Ok(Box::new(S3Destination::new(
+            &s3.path,
+            &s3.s3_endpoint,
+            &s3.s3_bucket,
+            s3.cloudfront_endpoint.clone(),
+            s3.cloudfront_distribution_id.clone(),
+            &s3.region_name,
+            &access_key,
+            &access_key_secret,
+        )))
+    } else {
+        Ok(Box::new(LocalDestination::new(
+            &destination.local.clone().unwrap().path,
+        )?))
+    }
+}
+
+pub struct LocalDestination {
+    pub path: String,
+}
+
+impl LocalDestination {
+    pub fn new(path: &str) -> Result<Self, std::io::Error> {
+        std::fs::create_dir_all(&path)?;
+        Ok(LocalDestination { path: path.into() })
+    }
+}
+
+impl Destination for LocalDestination {
+    fn upload(&mut self, path: &str, mut file: File) -> Result<(), Error> {
+        let s_path = format!("{}/{}", self.path, path);
+        let path = Path::new(&s_path);
+        println!("writing {}", &s_path);
+        std::fs::create_dir_all(path.parent().unwrap())?;
+        let mut writer = File::create(&path)?;
+        std::io::copy(&mut file, &mut writer)?;
+        Ok(())
+    }
+
+    fn delete(&mut self, path: &str) -> Result<(), Error> {
+        let path = format!("{}/{}", self.path, path);
+        println!("deleting {}", &path);
+        std::fs::remove_file(&path)
+    }
+
+    fn invalidate(&mut self, _paths: Vec<String>) -> Result<(), Error> {
+        Ok(())
+    }
+
+    fn name(&self) -> String {
+        "local".into()
+    }
+}
+
 pub struct S3Destination {
     pub path: String,
     pub s3_endpoint: String,
@@ -249,8 +313,10 @@ impl Stream for FileAdapter {
     }
 }
 
+use crate::config::DestinationConfig;
 #[cfg(test)]
 use std::collections::{BTreeMap, BTreeSet};
+use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[cfg(test)]
@@ -272,13 +338,17 @@ impl MemoryDestination {
     }
 
     pub fn explode(
-        self,
+        &self,
     ) -> (
         BTreeMap<String, Vec<u8>>,
         BTreeSet<String>,
         BTreeSet<String>,
     ) {
-        (self.map, self.delete_set, self.invalidation_set)
+        (
+            self.map.clone(),
+            self.delete_set.clone(),
+            self.invalidation_set.clone(),
+        )
     }
 
     pub fn print(&self) {

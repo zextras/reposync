@@ -53,7 +53,7 @@ impl SourceConfig {
 }
 
 #[derive(Serialize, Deserialize, Clone)]
-pub struct DestinationConfig {
+pub struct S3Destination {
     pub s3_endpoint: String,
     pub s3_bucket: String,
     pub path: String,
@@ -65,7 +65,18 @@ pub struct DestinationConfig {
     pub aws_credential_file: Option<String>,
 }
 
-impl DestinationConfig {
+#[derive(Serialize, Deserialize, Clone)]
+pub struct LocalDestination {
+    pub path: String,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+pub struct DestinationConfig {
+    pub s3: Option<S3Destination>,
+    pub local: Option<LocalDestination>,
+}
+
+impl S3Destination {
     ///returns (access_key_id,access_key_secret)
     pub fn get_aws_credentials(&self) -> Result<(String, String), std::io::Error> {
         if self.access_key_id.is_some() && self.access_key_secret.is_some() {
@@ -158,13 +169,22 @@ pub fn load_config(path: &str) -> Result<Config, String> {
     let mut config: Config = config_result.unwrap();
     for repo in &mut config.repo {
         repo.source.endpoint = remove_trailing_slash(&repo.source.endpoint);
-        repo.destination.s3_endpoint = remove_trailing_slash(&repo.destination.s3_endpoint);
-        repo.destination.path =
-            remove_initial_slash(&remove_trailing_slash(&repo.destination.path));
-        if repo.destination.cloudfront_endpoint.is_some() {
-            repo.destination.cloudfront_endpoint = Some(remove_trailing_slash(
-                &repo.destination.cloudfront_endpoint.clone().unwrap(),
-            ));
+        if repo.destination.s3.is_some() {
+            let mut s3 = repo.destination.s3.clone().unwrap();
+            s3.s3_endpoint = remove_trailing_slash(&s3.s3_endpoint);
+            s3.path = remove_initial_slash(&remove_trailing_slash(&s3.path));
+            if s3.cloudfront_endpoint.is_some() {
+                s3.cloudfront_endpoint = Some(remove_trailing_slash(
+                    &s3.cloudfront_endpoint.clone().unwrap(),
+                ));
+            }
+            repo.destination.s3 = Some(s3);
+        }
+
+        if repo.destination.local.is_some() {
+            let mut local = repo.destination.local.clone().unwrap();
+            local.path = remove_trailing_slash(&local.path);
+            repo.destination.local = Some(local);
         }
     }
 
@@ -209,8 +229,33 @@ pub fn load_config(path: &str) -> Result<Config, String> {
             }
         }
 
-        if let Err(err) = repo.destination.get_aws_credentials() {
-            return Err(format!("cannot read aws credential: {}", err.to_string()));
+        if repo.destination.s3.is_some() && repo.destination.local.is_some() {
+            return Result::Err(format!("cannot have both s3 and local destination"));
+        }
+
+        if repo.destination.s3.is_none() && repo.destination.local.is_none() {
+            return Result::Err(format!(
+                "you must define at least one destination, either local or s3"
+            ));
+        }
+
+        if repo.destination.s3.is_some() {
+            if let Err(err) = repo.destination.s3.clone().unwrap().get_aws_credentials() {
+                return Err(format!("cannot read aws credential: {}", err.to_string()));
+            }
+        }
+
+        if repo.destination.local.is_some() {
+            if !repo
+                .destination
+                .local
+                .clone()
+                .unwrap()
+                .path
+                .starts_with("/")
+            {
+                return Err(format!("local destination path must be absolute"));
+            }
         }
     }
 

@@ -69,14 +69,8 @@ repo:
         =emKC
         -----END PGP PUBLIC KEY BLOCK-----
     destination:
-      s3_endpoint: https://s3.example.com/
-      s3_bucket: "my-bucket"
-      region_name: "custom"
-      path: "/centos8/"
-      cloudfront_endpoint: https://cloudfront.example.com/
-      cloudfront_distribution_id: id
-      access_key_id: key
-      access_key_secret: secret
+      local:
+        path: "/var/lib/reposync/ubuntu/"
   - name: ubuntu
     versions:
       - xenial
@@ -142,11 +136,12 @@ repo:
 
         -----END PGP PUBLIC KEY BLOCK-----
     destination:
-      s3_endpoint: https://s3.example.com/
-      s3_bucket: "my-bucket"
-      path: "/ubuntu/"
-      cloudfront_endpoint: https://cloudfront.example.com/
-      cloudfront_distribution_id: id
-      region_name: "my-region"
-      access_key_id: key
-      access_key_secret: secret
+      s3:
+        s3_endpoint: https://s3.example.com/
+        s3_bucket: "my-bucket"
+        path: "/ubuntu/"
+        cloudfront_endpoint: https://cloudfront.example.com/
+        cloudfront_distribution_id: id
+        region_name: "my-region"
+        access_key_id: key
+        access_key_secret: secret

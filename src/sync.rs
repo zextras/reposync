@@ -1,5 +1,5 @@
-use crate::config::{Config, DestinationConfig, RepositoryConfig};
-use crate::destination::{Destination, S3Destination};
+use crate::config::{Config, RepositoryConfig};
+use crate::destination::{create_destination, Destination};
 use crate::fetcher::Fetcher;
 use crate::locks::Lock;
 use crate::packages::{Collection, Hash, IndexFile, Package, Repository};
@@ -36,6 +36,7 @@ Steps:
  - unlock
 */
 
+#[derive(Clone, Eq, PartialEq)]
 struct CopyOperation {
     is_replace: bool,
     path: String,
@@ -44,6 +45,7 @@ struct CopyOperation {
     local_file: Option<String>,
 }
 
+#[derive(Clone, Eq, PartialEq)]
 struct DeleteOperation {
     path: String,
 }
@@ -306,10 +308,10 @@ impl SyncManager {
             Duration::from_secs(self.config.general.timeout as u64),
         )?;
 
-        let mut destination = create_destination(&repo_config.destination);
+        let mut destination = create_destination(&repo_config.destination)?;
 
         return if let Some(_lock) = self.lock.lock_sync(&repo_config.name) {
-            self.sync_repo_internal(fetcher, &mut destination, repo_config)
+            self.sync_repo_internal(fetcher, destination.as_mut(), repo_config)
         } else {
             Result::Err(std::io::Error::new(
                 ErrorKind::WouldBlock,
@@ -671,29 +673,25 @@ impl SyncManager {
         }
 
         (
-            packages_copy_list,
-            packages_delete_list,
-            index_copy_list,
-            index_delete_list,
+            SyncManager::deduplicate_list(packages_copy_list),
+            SyncManager::deduplicate_list(packages_delete_list),
+            SyncManager::deduplicate_list(index_copy_list),
+            SyncManager::deduplicate_list(index_delete_list),
         )
     }
-}
 
-fn create_destination(destination: &DestinationConfig) -> S3Destination {
-    let (access_key, access_key_secret) = destination
-        .get_aws_credentials()
-        .expect("cannot read aws cred, should be already validated");
-
-    S3Destination::new(
-        &destination.path,
-        &destination.s3_endpoint,
-        &destination.s3_bucket,
-        destination.cloudfront_endpoint.clone(),
-        destination.cloudfront_distribution_id.clone(),
-        &destination.region_name,
-        &access_key,
-        &access_key_secret,
-    )
+    fn deduplicate_list<T>(list: Vec<T>) -> Vec<T>
+    where
+        T: Eq + Clone,
+    {
+        let mut tmp: Vec<T> = Vec::new();
+        list.into_iter().for_each(|x| {
+            if !tmp.contains(&x) {
+                tmp.push(x);
+            }
+        });
+        tmp
+    }
 }
 
 #[cfg(test)]
@@ -732,15 +730,8 @@ pub mod tests {
                     authorization_file: None,
                 },
                 destination: DestinationConfig {
-                    s3_endpoint: "".to_string(),
-                    s3_bucket: "".to_string(),
-                    cloudfront_distribution_id: None,
-                    cloudfront_endpoint: None,
-                    access_key_id: None,
-                    access_key_secret: None,
-                    region_name: "".to_string(),
-                    path: "ubuntu/".to_string(),
-                    aws_credential_file: None,
+                    s3: None,
+                    local: None,
                 },
                 versions: vec!["focal".into()],
             }],
@@ -785,7 +776,7 @@ pub mod tests {
         let config = create_config(&tmp_dir);
 
         let repo_config = config.repo.get(0).unwrap();
-        let mut destination = MemoryDestination::new("ubuntu");
+        let mut destination: MemoryDestination = MemoryDestination::new("ubuntu");
 
         let sync_manager = SyncManager {
             config: config.clone(),
@@ -882,7 +873,7 @@ pub mod tests {
             "samples/debian/Release.2",
             "samples/debian/Packages.2",
         );
-        let mut destination = MemoryDestination::new("ubuntu");
+        let mut destination: MemoryDestination = MemoryDestination::new("ubuntu");
         sync_manager
             .sync_repo_internal(Box::new(mock_fetcher), &mut destination, repo_config)
             .unwrap();
