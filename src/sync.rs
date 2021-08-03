@@ -308,7 +308,7 @@ impl SyncManager {
             Duration::from_secs(self.config.general.timeout as u64),
         )?;
 
-        let mut destination = create_destination(&repo_config.destination)?;
+        let mut destination = create_destination(&self.config.general, &repo_config.destination)?;
 
         return if let Some(_lock) = self.lock.lock_sync(&repo_config.name) {
             self.sync_repo_internal(fetcher, destination.as_mut(), repo_config)

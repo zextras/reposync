@@ -8,7 +8,7 @@ use rusoto_core::credential::StaticProvider;
 use rusoto_core::{region, HttpClient, Region};
 use rusoto_s3::{DeleteObjectRequest, PutObjectRequest, S3Client, StreamingBody, S3};
 use std::fs::File;
-use std::io::{Error, ErrorKind, Read};
+use std::io::{Error, ErrorKind, Read, Seek, SeekFrom};
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
@@ -20,6 +20,7 @@ pub trait Destination {
 }
 
 pub fn create_destination(
+    general: &GeneralConfig,
     destination: &DestinationConfig,
 ) -> Result<Box<dyn Destination>, std::io::Error> {
     if destination.s3.is_some() {
@@ -38,6 +39,8 @@ pub fn create_destination(
             &s3.region_name,
             &access_key,
             &access_key_secret,
+            general.max_retries,
+            Duration::from_secs(general.retry_sleep),
         )))
     } else {
         Ok(Box::new(LocalDestination::new(
@@ -92,6 +95,8 @@ pub struct S3Destination {
     pub region_name: String,
     pub access_key_id: String,
     pub access_key_secret: String,
+    pub max_retries: u32,
+    pub retry_sleep: Duration,
 }
 
 impl S3Destination {
@@ -104,6 +109,8 @@ impl S3Destination {
         region_name: &str,
         access_key_id: &str,
         access_key_secret: &str,
+        max_retries: u32,
+        retry_sleep: Duration,
     ) -> S3Destination {
         Self {
             path: path.into(),
@@ -114,6 +121,8 @@ impl S3Destination {
             region_name: region_name.into(),
             access_key_id: access_key_id.into(),
             access_key_secret: access_key_secret.into(),
+            max_retries,
+            retry_sleep,
         }
     }
 
@@ -177,105 +186,140 @@ where
 
 impl Destination for S3Destination {
     fn upload(&mut self, path: &str, file: File) -> Result<(), Error> {
+        let mut err: Option<Error> = None;
+
         let client = self.s3_client();
-
         let len = Some(file.metadata()?.len() as i64);
-        let body = StreamingBody::new(FileAdapter { file });
 
-        println!(
-            "uploading {}/{}/{}",
-            &self.s3_endpoint,
-            self.s3_bucket,
-            &self.s3_path(path)
-        );
-        let result = await_for(client.put_object(PutObjectRequest {
-            bucket: self.s3_bucket.clone(),
-            key: self.s3_path(path),
-            body: Some(body),
-            content_length: len,
-            ..Default::default()
-        }));
+        for n in 0..self.max_retries {
+            if n > 0 {
+                sleep(self.retry_sleep);
+                println!("Failed, retrying in {}s...", self.retry_sleep.as_secs());
+            }
+            let mut file = file.try_clone().expect("cannot duplicate file descriptor");
+            file.seek(SeekFrom::Start(0))?;
+            let body = StreamingBody::new(FileAdapter { file });
 
-        if result.is_err() {
-            return Err(std::io::Error::new(
-                ErrorKind::Other,
-                format!("upload failed: {}", result.err().unwrap().to_string()),
-            ));
+            println!(
+                "uploading {}/{}/{}",
+                &self.s3_endpoint,
+                self.s3_bucket,
+                &self.s3_path(path)
+            );
+            let result = await_for(client.put_object(PutObjectRequest {
+                bucket: self.s3_bucket.clone(),
+                key: self.s3_path(path),
+                body: Some(body),
+                content_length: len,
+                ..Default::default()
+            }));
+
+            if result.is_err() {
+                err = Some(std::io::Error::new(
+                    ErrorKind::Other,
+                    format!("upload failed: {}", result.err().unwrap().to_string()),
+                ));
+            } else {
+                return Ok(());
+            }
         }
 
-        Ok(())
+        Err(err.unwrap())
     }
 
     fn delete(&mut self, path: &str) -> Result<(), Error> {
+        let mut err: Option<Error> = None;
         let client = self.s3_client();
 
-        println!(
-            "deleting {}/{}/{}",
-            &self.s3_endpoint,
-            self.s3_bucket,
-            self.s3_path(path)
-        );
-        let future = client.delete_object(DeleteObjectRequest {
-            bucket: self.s3_bucket.clone(),
-            key: self.s3_path(path),
-            ..Default::default()
-        });
+        for n in 0..self.max_retries {
+            if n > 0 {
+                sleep(self.retry_sleep);
+                println!("Failed, retrying in {}s...", self.retry_sleep.as_secs());
+            }
+            println!(
+                "deleting {}/{}/{}",
+                &self.s3_endpoint,
+                self.s3_bucket,
+                self.s3_path(path)
+            );
+            let future = client.delete_object(DeleteObjectRequest {
+                bucket: self.s3_bucket.clone(),
+                key: self.s3_path(path),
+                ..Default::default()
+            });
 
-        let result = await_for(future);
-        if result.is_err() {
-            return Err(std::io::Error::new(
-                ErrorKind::Other,
-                format!("delete failed: {}", result.err().unwrap().to_string()),
-            ));
+            let result = await_for(future);
+            if result.is_err() {
+                err = Some(std::io::Error::new(
+                    ErrorKind::Other,
+                    format!("delete failed: {}", result.err().unwrap().to_string()),
+                ));
+            } else {
+                return Ok(());
+            }
         }
 
-        Ok(())
+        Err(err.unwrap())
     }
 
     fn invalidate(&mut self, paths: Vec<String>) -> Result<(), Error> {
         if let Some(client) = self.cloudfront_client() {
+            let mut err: Option<Error> = None;
             if !paths.is_empty() {
-                for path in &paths {
-                    println!("invalidating {}", path);
-                }
-                let future = client.create_invalidation(CreateInvalidationRequest {
-                    distribution_id: self.cloudfront_arn.clone().unwrap(),
-                    invalidation_batch: InvalidationBatch {
-                        caller_reference: SystemTime::now()
-                            .duration_since(UNIX_EPOCH)
-                            .unwrap()
-                            .as_millis()
-                            .to_string(),
-                        paths: Paths {
-                            quantity: paths.len() as i64,
-                            items: Some(
-                                paths
-                                    .iter()
-                                    .map(|path| format!("/{}", self.s3_path(path)))
-                                    .collect::<Vec<String>>(),
-                            ),
-                        },
-                    },
-                });
+                for n in 0..self.max_retries {
+                    if n > 0 {
+                        sleep(self.retry_sleep);
+                        println!("Failed, retrying in {}s...", self.retry_sleep.as_secs());
+                    }
+                    for path in &paths {
+                        println!("invalidating {}", path);
+                    }
 
-                let result = await_for(future);
-                if result.is_err() {
-                    return Err(std::io::Error::new(
-                        ErrorKind::Other,
-                        format!(
-                            "cloudfront invalidation failed: {}",
-                            result.err().unwrap().to_string()
-                        ),
-                    ));
+                    let future = client.create_invalidation(CreateInvalidationRequest {
+                        distribution_id: self.cloudfront_arn.clone().unwrap(),
+                        invalidation_batch: InvalidationBatch {
+                            caller_reference: SystemTime::now()
+                                .duration_since(UNIX_EPOCH)
+                                .unwrap()
+                                .as_millis()
+                                .to_string(),
+                            paths: Paths {
+                                quantity: paths.len() as i64,
+                                items: Some(
+                                    paths
+                                        .iter()
+                                        .map(|path| format!("/{}", self.s3_path(path)))
+                                        .collect::<Vec<String>>(),
+                                ),
+                            },
+                        },
+                    });
+
+                    let result = await_for(future);
+                    if result.is_err() {
+                        err = Some(std::io::Error::new(
+                            ErrorKind::Other,
+                            format!(
+                                "cloudfront invalidation failed: {}",
+                                result.err().unwrap().to_string()
+                            ),
+                        ));
+                    } else {
+                        return Ok(());
+                    }
                 }
+
+                Err(err.unwrap())
+            } else {
+                Ok(())
             }
         } else {
             for path in paths {
                 println!("skipping cloudfront invalidation for {}", path);
             }
-        }
 
-        Ok(())
+            Ok(())
+        }
     }
 
     fn name(&self) -> String {
@@ -313,11 +357,12 @@ impl Stream for FileAdapter {
     }
 }
 
-use crate::config::DestinationConfig;
+use crate::config::{DestinationConfig, GeneralConfig};
 #[cfg(test)]
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::thread::sleep;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 #[cfg(test)]
 pub struct MemoryDestination {
