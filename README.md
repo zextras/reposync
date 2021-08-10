@@ -65,6 +65,8 @@ $ wget --method=POST http://localhost:8080/repository/my-repo/sync -q -O - | jq 
 ---
 
 ## Config file
+
+see [a sample config](samples/config.yaml) for a complete sample.
 ```
 ---
 general:
@@ -109,22 +111,26 @@ repo:
         ....
         -----END PGP PUBLIC KEY BLOCK-----
     destination:
+# only one destination must be specified, either local or s3
+      local:
+        path: "/my/repo/path"
+      s3:
 # s3 endpoint, either use AWS or custom
-      s3_endpoint: https://s3.example.com/
+        s3_endpoint: https://s3.example.com/
 # s3 bucket
-      s3_bucket: "my-bucket"
+        s3_bucket: "my-bucket"
 # region name, if using AWS, use official names
-      region_name: "custom"
+        region_name: "custom"
 # path where to copy the repisotiry to
-      path: "/centos8/"
+        path: "/centos8/"
 # optional cloudfront endpoint & ARN resource ID
-      cloudfront_endpoint: https://cloudfront.amazonaws.com/
-      cloudfront_distribution_id: id
+        cloudfront_endpoint: https://cloudfront.amazonaws.com/
+        cloudfront_distribution_id: id
 # AWS credentials
-      access_key_id: key
-      access_key_secret: secret
+        access_key_id: key
+        access_key_secret: secret
 # AWS credential file, expected format: {ACCESS_KEY_ID}\n{SECRET_ACCESS_KEY}
-      aws_credential_file: /run/secrets/aws_credential
+        aws_credential_file: /run/secrets/aws_credential
 
 
 ```
