@@ -1,6 +1,52 @@
 # RepoSync
 
-Keep any debian/redhat repository synchronized to an S3 bucket using only HTTP.
+This software mirrors Debian and RedHat repositories to either an S3 bucket,
+with an optional CloudFront, or a local directory.
+
+No special access is required from the source repository.
+
+---
+
+## Features
+- RPM and DEB repository
+- CHECKSUM validation
+- signature validation
+- one time mirroring
+- server mode with anonymous API to trigger synchronizations
+- high consistency
+- single binary
+
+## Use cases
+We develop this software mainly for mirror repositories to S3/CloudFront, so we
+could leverage the simplicity of having a low-load repository with the availability of a 
+managed service.
+Another use case is to mirror repositories locally, allowing deployments within a closed network.
+
+---
+
+## How it works
+
+### TLDR
+We ordered the operation specifically to reduce the effects when the synchronization is
+interrupted, in short as long as source packages are not modified we can guarantee consistency.
+
+### Steps
+When a synchronization starts RepoSync downloads the indexes of the repository and compare them
+with the current ones, which are empty in the beginning, it creates an operation for each new,
+deleted, or modified package or index. It downloads one package at the time to reduce storage 
+requirements, validate it, and then write it in the destination repository. The procedure 
+writes and uploads indexes **after** all new packages are written, so every package referenced
+in the new index will be available right away.
+After the upload RepoSync invalidates modified files in CloudFront cache, if configured.
+Then RepoSync deletes old indexes and removed packages, as new indexes are already available,
+and as the final step it writes the new indexes locally the new indexes, which will be used on the
+next synchronization.
+
+If at any point during the synchronization a failure were to occur such as a checksum mismatch or a I/O
+error, RepoSync interrupts the synchronization, and delete downloaded indexes.
+For RepoSync the synchronization never happened, and will perform everything from scratch on the next 
+iteration.
+
 ---
 
 ## Help
