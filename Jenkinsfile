@@ -17,7 +17,8 @@ pipeline {
     stages {
         stage('Build') {
             steps {
-                sh 'cargo build'
+                sh 'cargo build --release'
+                stash includes: 'target/release/reposync', name: 'binaries'
             }
         }
         stage('Tests') {
@@ -32,7 +33,7 @@ pipeline {
             stages {
                 stage('Build Release Image') {
                     steps {
-                        sh 'cargo build --release'
+                        unstash 'binaries'
                         sh 'cp -a target/release/reposync deployment/'
                         dir('deployment') {
                             script {

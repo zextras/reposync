@@ -1,0 +1,8 @@
+# number of seconds between checks
+set daemon 10
+set init
+set idfile /var/lib/monit/id
+set logfile /var/log/monit.log
+
+set httpd port 2812 and
+  allow admin:assext
