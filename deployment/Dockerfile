@@ -1,17 +1,19 @@
-FROM ubuntu:18.04
-
+FROM alpine:latest AS builder
 LABEL maintainer = "Golden Beatles <goldenbeatles@zextras.com>"
 LABEL description = "Reposync image"
 
-ENV DEBIAN_FRONTEND=noninteractive
-SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 RUN \
-  apt-get update; \
-  apt-get upgrade; \
-  apt-get install -y --no-install-recommends ca-certificates libssl1.1 monit; \
-  rm -rf /var/lib/apt/lists/*
+  apk add --no-cache cargo monit openssl-dev pkgconf
 
-COPY reposync /usr/local/bin/reposync
-COPY monitrc /etc/monitrc
+COPY . /project
+WORKDIR /project
+RUN \
+  cargo build --release
+
+FROM alpine:latest
+COPY --from=builder /project/target/release/reposync /usr/bin/reposync
+COPY --from=builder /project/deployment/monitrc /etc/monitrc
 RUN chmod 700 /etc/monitrc
+RUN \
+  apk add --no-cache ca-certificates monit openssl
 ENTRYPOINT ["monit"]

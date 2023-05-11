@@ -8,7 +8,7 @@ pipeline {
     environment {
         BASE_URL="registry.dev.zextras.com/infra/"
         IMAGE_NAME="reposync"
-        DOCKER_ARGS="--no-cache ."
+        DOCKER_ARGS="--no-cache . -f deployment/Dockerfile"
         IMAGE_VERSION="${TAG_NAME}"
     }
     options {
@@ -18,7 +18,6 @@ pipeline {
         stage('Build') {
             steps {
                 sh 'cargo build --release'
-                stash includes: 'target/release/reposync', name: 'binaries'
             }
         }
         stage('Tests') {
@@ -33,8 +32,6 @@ pipeline {
             stages {
                 stage('Build Release Image') {
                     steps {
-                        unstash 'binaries'
-                        sh 'cp -a target/release/reposync deployment/'
                         dir('deployment') {
                             script {
                                 buildImage = docker.build("${BASE_URL}${IMAGE_NAME}:${IMAGE_VERSION}", env.DOCKER_ARGS)
