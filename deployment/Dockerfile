@@ -15,5 +15,5 @@ COPY --from=builder /project/target/release/reposync /usr/bin/reposync
 COPY --from=builder /project/deployment/monitrc /etc/monitrc
 RUN chmod 700 /etc/monitrc
 RUN \
-  apk add --no-cache ca-certificates monit openssl
+  apk add --no-cache ca-certificates libgcc monit openssl
 ENTRYPOINT ["monit"]
