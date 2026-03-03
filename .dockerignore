@@ -1,0 +1,33 @@
+# Build artifacts
+target/
+
+# Git
+.git/
+.gitignore
+
+# CI/CD
+.github/
+deployment/
+
+# Documentation
+README.md
+LICENSE
+*.md
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temporary files
+*.tmp
+*.swp
+*.swo
+*~
+
+# Test files
+/tmp/
+*.log

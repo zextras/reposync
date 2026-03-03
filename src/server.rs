@@ -34,7 +34,7 @@ pub async fn create(sync_manager: SyncManager, addr: &str) {
     let listener = tokio::net::TcpListener::bind(addr)
         .await
         .expect("Failed to bind address");
-    println!("starting http server, listening on  {}", addr);
+    log::info!("starting http server, listening on {}", addr);
     axum::serve(listener, app)
         .await
         .expect("HTTP server error");
@@ -69,7 +69,7 @@ fn get_repo_status(sync_manager: &SyncManager, repo_name: &str) -> Option<Status
 /// GET /health — simple health-check
 async fn health_get(State(sm): State<Arc<SyncManager>>) -> impl IntoResponse {
     if let Err(err) = sm.check_permissions() {
-        println!("health-check failed: {}", err);
+        log::warn!("health-check failed: {}", err);
         StatusCode::SERVICE_UNAVAILABLE
     } else {
         StatusCode::OK
@@ -98,5 +98,29 @@ async fn repository_repo_sync_post(
         Ok(Json(status))
     } else {
         Err(StatusCode::NOT_FOUND)
+    }
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{Duration, UNIX_EPOCH};
+
+    #[test]
+    fn normalize_epoch_is_zero() {
+        assert_eq!(0, normalize(&UNIX_EPOCH));
+    }
+
+    #[test]
+    fn normalize_one_second_past_epoch() {
+        let t = UNIX_EPOCH + Duration::from_secs(1);
+        assert_eq!(1000, normalize(&t));
+    }
+
+    #[test]
+    fn normalize_millis_precision() {
+        let t = UNIX_EPOCH + Duration::from_millis(12345);
+        assert_eq!(12345, normalize(&t));
     }
 }

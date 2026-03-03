@@ -124,3 +124,63 @@ impl RepoMetadataStore for LiveRepoMetadataStore {
         }
     }
 }
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::rc::Rc;
+    use tempfile::TempDir;
+
+    struct NoOpFetcher;
+    impl Fetcher for NoOpFetcher {
+        fn fetch(&self, _url: &str) -> Result<Box<dyn std::io::Read>, crate::fetcher::FetchError> {
+            Err(crate::fetcher::FetchError { code: 404, error: "not found".into() })
+        }
+    }
+
+    #[test]
+    fn saved_store_read_returns_err_for_missing_file() {
+        let dir = TempDir::new().unwrap();
+        let store = SavedRepoMetadataStore::new(dir.path().to_str().unwrap());
+        let result = store.read("nonexistent/path");
+        // SavedRepoMetadataStore propagates file-not-found as Err (no NotFound→None mapping)
+        assert!(result.is_err());
+        assert_eq!(result.err().unwrap().kind(), std::io::ErrorKind::NotFound);
+    }
+
+    #[test]
+    fn live_store_new_clears_tmp_directory() {
+        let base = TempDir::new().unwrap();
+        let tmp_dir = base.path().join("repo_tmp");
+        std::fs::create_dir_all(&tmp_dir).unwrap();
+        // create a sentinel file inside
+        std::fs::write(tmp_dir.join("sentinel"), b"hello").unwrap();
+
+        let store = LiveRepoMetadataStore::new(
+            "https://example.com",
+            tmp_dir.to_str().unwrap(),
+            Rc::new(NoOpFetcher),
+        );
+        assert!(store.is_ok(), "LiveRepoMetadataStore::new should succeed");
+        // sentinel file should have been removed along with the directory
+        assert!(!tmp_dir.join("sentinel").exists());
+    }
+
+    #[test]
+    fn live_store_read_returns_none_for_missing_file() {
+        let base = TempDir::new().unwrap();
+        let tmp_dir = base.path().join("repo2_tmp");
+
+        let store = LiveRepoMetadataStore::new(
+            "https://example.com",
+            tmp_dir.to_str().unwrap(),
+            Rc::new(NoOpFetcher),
+        )
+        .unwrap();
+
+        let result = store.read("nonexistent/path");
+        assert!(result.is_ok());
+        assert!(result.unwrap().is_none());
+    }
+}
