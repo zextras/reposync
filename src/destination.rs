@@ -1,9 +1,9 @@
 use aws_sdk_cloudfront::types::{InvalidationBatch, Paths};
 use aws_sdk_s3::primitives::ByteStream;
 use std::fs::File;
-use std::io::{Error, ErrorKind, Read};
+use std::io::{Error, Read};
 use std::path::Path;
-use std::thread::sleep;
+
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::config::{DestinationConfig, GeneralConfig};
@@ -60,7 +60,7 @@ impl Destination for LocalDestination {
     fn upload(&mut self, path: &str, mut file: File) -> Result<(), Error> {
         let s_path = format!("{}/{}", self.path, path);
         let path = Path::new(&s_path);
-        println!("writing {}", &s_path);
+        log::info!("writing {}", &s_path);
         std::fs::create_dir_all(path.parent().unwrap())?;
         let mut writer = File::create(path)?;
         std::io::copy(&mut file, &mut writer)?;
@@ -69,7 +69,7 @@ impl Destination for LocalDestination {
 
     fn delete(&mut self, path: &str) -> Result<(), Error> {
         let path = format!("{}/{}", self.path, path);
-        println!("deleting {}", &path);
+        log::info!("deleting {}", &path);
         std::fs::remove_file(&path)
     }
 
@@ -94,6 +94,7 @@ pub struct S3Destination {
 }
 
 impl S3Destination {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         path: &str,
         s3_endpoint: &str,
@@ -181,85 +182,70 @@ fn block_on<F: std::future::Future>(future: F) -> F::Output {
 
 impl Destination for S3Destination {
     fn upload(&mut self, path: &str, mut file: File) -> Result<(), Error> {
-        let mut err: Option<Error> = None;
+        crate::retry::retry_with_backoff(
+            self.max_retries,
+            self.retry_sleep,
+            "upload",
+            || {
+                // Read file into memory for the upload body
+                let mut buf = Vec::new();
+                file.seek_to_start()?;
+                file.read_to_end(&mut buf)?;
+                let body = ByteStream::from(buf);
 
-        for n in 0..self.max_retries {
-            if n > 0 {
-                sleep(self.retry_sleep);
-                println!("Failed, retrying in {}s...", self.retry_sleep.as_secs());
-            }
+                log::info!(
+                    "uploading {}/{}/{}",
+                    &self.s3_endpoint,
+                    self.s3_bucket,
+                    &self.s3_path(path)
+);
 
-            // Read file into memory for the upload body
-            let mut buf = Vec::new();
-            file.seek_to_start()?;
-            file.read_to_end(&mut buf)?;
-            let body = ByteStream::from(buf);
+                let result = block_on(
+                    self.s3_client
+                        .put_object()
+                        .bucket(&self.s3_bucket)
+                        .key(self.s3_path(path))
+                        .body(body)
+                        .send(),
+                );
 
-            println!(
-                "uploading {}/{}/{}",
-                &self.s3_endpoint,
-                self.s3_bucket,
-                &self.s3_path(path)
-            );
-
-            let result = block_on(
-                self.s3_client
-                    .put_object()
-                    .bucket(&self.s3_bucket)
-                    .key(self.s3_path(path))
-                    .body(body)
-                    .send(),
-            );
-
-            match result {
-                Ok(_) => return Ok(()),
-                Err(e) => {
-                    err = Some(std::io::Error::new(
-                        ErrorKind::Other,
-                        format!("upload failed: {}", e),
-                    ));
+                match result {
+                    Ok(_) => Ok(()),
+                    Err(e) => Err(std::io::Error::other(format!("upload failed: {}", e))),
                 }
-            }
-        }
-
-        Err(err.unwrap())
+            },
+        )
+        .map_err(std::io::Error::other)
     }
 
     fn delete(&mut self, path: &str) -> Result<(), Error> {
-        let mut err: Option<Error> = None;
+        crate::retry::retry_with_backoff(
+            self.max_retries,
+            self.retry_sleep,
+            "delete",
+            || {
+                log::info!(
+                    "deleting {}/{}/{}",
+                    &self.s3_endpoint,
+                    self.s3_bucket,
+                    self.s3_path(path)
+);
 
-        for n in 0..self.max_retries {
-            if n > 0 {
-                sleep(self.retry_sleep);
-                println!("Failed, retrying in {}s...", self.retry_sleep.as_secs());
-            }
-            println!(
-                "deleting {}/{}/{}",
-                &self.s3_endpoint,
-                self.s3_bucket,
-                self.s3_path(path)
-            );
+                let result = block_on(
+                    self.s3_client
+                        .delete_object()
+                        .bucket(&self.s3_bucket)
+                        .key(self.s3_path(path))
+                        .send(),
+                );
 
-            let result = block_on(
-                self.s3_client
-                    .delete_object()
-                    .bucket(&self.s3_bucket)
-                    .key(self.s3_path(path))
-                    .send(),
-            );
-
-            match result {
-                Ok(_) => return Ok(()),
-                Err(e) => {
-                    err = Some(std::io::Error::new(
-                        ErrorKind::Other,
-                        format!("delete failed: {}", e),
-                    ));
+                match result {
+                    Ok(_) => Ok(()),
+                    Err(e) => Err(std::io::Error::other(format!("delete failed: {}", e))),
                 }
-            }
-        }
-
-        Err(err.unwrap())
+            },
+        )
+        .map_err(std::io::Error::other)
     }
 
     fn invalidate(&mut self, paths: Vec<String>) -> Result<(), Error> {
@@ -267,7 +253,7 @@ impl Destination for S3Destination {
             Some(c) => c,
             None => {
                 for path in paths {
-                    println!("skipping cloudfront invalidation for {}", path);
+                    log::debug!("skipping cloudfront invalidation for {}", path);
                 }
                 return Ok(());
             }
@@ -277,67 +263,57 @@ impl Destination for S3Destination {
             return Ok(());
         }
 
-        let mut err: Option<Error> = None;
-
-        for n in 0..self.max_retries {
-            if n > 0 {
-                sleep(self.retry_sleep);
-                println!("Failed, retrying in {}s...", self.retry_sleep.as_secs());
-            }
-            for path in &paths {
-                println!("invalidating {}", path);
-            }
-
-            let items: Vec<String> = paths
-                .iter()
-                .map(|p| format!("/{}", self.s3_path(p)))
-                .collect();
-
-            let invalidation_paths = Paths::builder()
-                .quantity(paths.len() as i32)
-                .set_items(Some(items))
-                .build()
-                .map_err(|e| {
-                    std::io::Error::new(ErrorKind::Other, format!("failed to build Paths: {}", e))
-                })?;
-
-            let batch = InvalidationBatch::builder()
-                .caller_reference(
-                    SystemTime::now()
-                        .duration_since(UNIX_EPOCH)
-                        .unwrap()
-                        .as_millis()
-                        .to_string(),
-                )
-                .paths(invalidation_paths)
-                .build()
-                .map_err(|e| {
-                    std::io::Error::new(
-                        ErrorKind::Other,
-                        format!("failed to build InvalidationBatch: {}", e),
-                    )
-                })?;
-
-            let result = block_on(
-                client
-                    .create_invalidation()
-                    .distribution_id(self.cloudfront_arn.clone().unwrap())
-                    .invalidation_batch(batch)
-                    .send(),
-            );
-
-            match result {
-                Ok(_) => return Ok(()),
-                Err(e) => {
-                    err = Some(std::io::Error::new(
-                        ErrorKind::Other,
-                        format!("cloudfront invalidation failed: {}", e),
-                    ));
+        crate::retry::retry_with_backoff(
+            self.max_retries,
+            self.retry_sleep,
+            "invalidate",
+            || {
+                for path in &paths {
+                    log::info!("invalidating {}", path);
                 }
-            }
-        }
 
-        Err(err.unwrap())
+                let items: Vec<String> = paths
+                    .iter()
+                    .map(|p| format!("/{}", self.s3_path(p)))
+                    .collect();
+
+                let invalidation_paths = Paths::builder()
+                    .quantity(paths.len() as i32)
+                    .set_items(Some(items))
+                    .build()
+                    .map_err(|e| {
+                        std::io::Error::other(format!("failed to build Paths: {}", e))
+                    })?;
+
+                let batch = InvalidationBatch::builder()
+                    .caller_reference(
+                        SystemTime::now()
+                            .duration_since(UNIX_EPOCH)
+                            .unwrap()
+                            .as_millis()
+                            .to_string(),
+                    )
+                    .paths(invalidation_paths)
+                    .build()
+                    .map_err(|e| {
+                        std::io::Error::other(format!("failed to build InvalidationBatch: {}", e))
+                    })?;
+
+                let result = block_on(
+                    client
+                        .create_invalidation()
+                        .distribution_id(self.cloudfront_arn.clone().unwrap())
+                        .invalidation_batch(batch)
+                        .send(),
+                );
+
+                match result {
+                    Ok(_) => Ok(()),
+                    Err(e) => Err(std::io::Error::other(format!("cloudfront invalidation failed: {}", e))),
+                }
+            },
+        )
+        .map_err(std::io::Error::other)
     }
 
     fn name(&self) -> String {

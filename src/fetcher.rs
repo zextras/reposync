@@ -4,13 +4,19 @@ use mockall::automock;
 use reqwest::blocking::Client;
 use reqwest::{header, StatusCode};
 use std::io::Read;
-use std::thread::sleep;
+
 use std::time::Duration;
 
 #[derive(PartialEq, PartialOrd, Eq, Ord, Debug, Hash, Clone)]
 pub struct FetchError {
     pub code: u16,
     pub error: String,
+}
+
+impl std::fmt::Display for FetchError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} ({})", self.error, self.code)
+    }
 }
 
 #[cfg_attr(test, automock)]
@@ -26,24 +32,32 @@ struct RetryFetcher {
 
 impl Fetcher for RetryFetcher {
     fn fetch(&self, url: &str) -> Result<Box<dyn Read>, FetchError> {
-        let mut err: Option<FetchError> = None;
-        for n in 0..self.max_retries {
-            if n > 0 {
-                sleep(self.retry_sleep);
-                println!("Failed, retrying in {}s...", self.retry_sleep.as_secs());
-            }
-            let result = self.fetcher.fetch(url);
-            if result.is_ok() {
-                return result;
-            }
-            let tmp_err = result.err().unwrap();
-            //no need to retry 404
-            if tmp_err.code == 404 {
-                return Err(tmp_err);
-            }
-            err = Some(tmp_err);
+        let mut last_err = None;
+        let result = crate::retry::retry_with_backoff(
+            self.max_retries,
+            self.retry_sleep,
+            "fetch",
+            || {
+                let res = self.fetcher.fetch(url);
+                match res {
+                    Ok(val) => Ok(Ok(val)),
+                    Err(e) => {
+                        if e.code == 404 {
+                            Ok(Err(e))
+                        } else {
+                            last_err = Some(e.clone());
+                            Err(e)
+                        }
+                    }
+                }
+            },
+        );
+
+        match result {
+            Ok(Ok(val)) => Ok(val),
+            Ok(Err(e)) => Err(e),
+            Err(_) => Err(last_err.unwrap()),
         }
-        Err(err.unwrap())
     }
 }
 
@@ -53,7 +67,7 @@ struct DirectFetcher {
 }
 impl Fetcher for DirectFetcher {
     fn fetch(&self, url: &str) -> Result<Box<dyn Read>, FetchError> {
-        println!("requesting: {}", url);
+        log::debug!("requesting: {}", url);
         let builder = Client::builder();
         let mut headers = header::HeaderMap::new();
         if self.secret.is_some() {
@@ -72,14 +86,13 @@ impl Fetcher for DirectFetcher {
             .expect("cannot create http client");
 
         let result = client.get(url).send();
-        if result.is_ok() {
-            let response = result.unwrap();
+        if let Ok(response) = result {
             if response.status().is_success() {
                 Result::Ok(Box::new(response))
             } else {
                 Result::Err(FetchError {
                     code: response.status().as_u16(),
-                    error: format!("request failed: {}", response.status().to_string()),
+                    error: format!("request failed: {}", response.status()),
                 })
             }
         } else {
@@ -89,7 +102,7 @@ impl Fetcher for DirectFetcher {
                     .status()
                     .unwrap_or(StatusCode::SERVICE_UNAVAILABLE)
                     .as_u16(),
-                error: format!("request failed: {}", err.to_string()),
+                error: format!("request failed: {}", err),
             })
         }
     }
