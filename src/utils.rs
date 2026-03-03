@@ -11,16 +11,15 @@ pub fn add_optional_index<T>(
 where
     T: RepoMetadataStore,
 {
-    let result = state.fetch(path);
-    if result.is_err() {
-        let err = result.err().unwrap();
-        if err.kind() == ErrorKind::NotFound {
-            Ok(None)
-        } else {
-            Err(err)
+    match state.fetch(path) {
+        Err(err) => {
+            if err.kind() == ErrorKind::NotFound {
+                Ok(None)
+            } else {
+                Err(err)
+            }
         }
-    } else {
-        let (disk_path, mut reader, size) = result.unwrap();
+        Ok((disk_path, mut reader, size)) => {
         indexes.insert(
             0,
             IndexFile {
@@ -33,5 +32,6 @@ where
         );
 
         Ok(Some(state.read(path).unwrap().unwrap()))
+        }
     }
 }

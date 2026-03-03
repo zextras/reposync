@@ -132,10 +132,10 @@ impl SyncManager {
                     //negative time
                     let result = self.sync_repo(&name);
                     if let Err(err) = result {
-                        println!("failed to synchronize {}: {}", &name, &err.to_string());
+                        log::error!("failed to synchronize {}: {}", &name, &err.to_string());
                         self.sync_completed(&name, &err.to_string());
                     } else {
-                        println!("{} fully synchronized", &name);
+                        log::info!("{} fully synchronized", &name);
                         self.sync_completed(&name, "successful");
                     }
                 }
@@ -290,7 +290,7 @@ impl SyncManager {
     }
 
     pub fn sync_repo(&self, repo_name: &str) -> Result<(), std::io::Error> {
-        println!("starting synchronization of {}", repo_name);
+        log::info!("starting synchronization of {}", repo_name);
         let repo_config = self.get_repo_config(repo_name);
         if repo_config.is_none() {
             return Err(std::io::Error::new(
@@ -370,7 +370,7 @@ impl SyncManager {
                 }
             }
         } else {
-            println!("no public pgp key provided, skipping metadata signature validation")
+            log::warn!("no public pgp key provided, skipping metadata signature validation")
         }
 
         let (current_repo, _) = self.load_current(repo_config)?;
@@ -384,45 +384,45 @@ impl SyncManager {
             return Ok(());
         }
 
-        println!(
+        log::info!(
             "{} packages and {} indexes to copy or update for a total of {:.2} MB.",
             packages_copy_list.len(),
             index_copy_list.len(),
             (packages_copy_list.iter().fold(0, |a, p| a + p.size)
                 + index_copy_list.iter().fold(0, |a, p| a + p.size)) as f64
                 / (1024f64 * 1024f64)
-        );
+);
 
-        println!(
+        log::info!(
             "{} packages and {} indexes to delete.",
             packages_delete_list.len(),
             index_delete_list.len()
-        );
+);
 
         if self.dry_run {
-            println!("[dry-run] would copy {} packages:", packages_copy_list.len());
+            log::info!("[dry-run] would copy {} packages:", packages_copy_list.len());
             for op in &packages_copy_list {
                 let action = if op.is_replace { "replace" } else { "copy" };
-                println!("  {} {} ({} bytes)", action, op.path, op.size);
+                log::info!("  {} {} ({} bytes)", action, op.path, op.size);
             }
-            println!("[dry-run] would copy {} indexes:", index_copy_list.len());
+            log::info!("[dry-run] would copy {} indexes:", index_copy_list.len());
             for op in &index_copy_list {
                 let action = if op.is_replace { "replace" } else { "copy" };
-                println!("  {} {} ({} bytes)", action, op.path, op.size);
+                log::info!("  {} {} ({} bytes)", action, op.path, op.size);
             }
-            println!("[dry-run] would delete {} packages:", packages_delete_list.len());
+            log::info!("[dry-run] would delete {} packages:", packages_delete_list.len());
             for op in &packages_delete_list {
-                println!("  delete {}", op.path);
+                log::info!("  delete {}", op.path);
             }
-            println!("[dry-run] would delete {} indexes:", index_delete_list.len());
+            log::info!("[dry-run] would delete {} indexes:", index_delete_list.len());
             for op in &index_delete_list {
-                println!("  delete {}", op.path);
+                log::info!("  delete {}", op.path);
             }
-            println!("[dry-run] would update saved metadata");
+            log::info!("[dry-run] would update saved metadata");
             return Ok(());
         }
 
-        println!("sync operation is atomic, either it's fully completed or will be performed from scratch");
+        log::info!("sync operation is atomic, either it's fully completed or will be performed from scratch");
 
         let mut invalidation_paths: Vec<String> = Vec::new();
         invalidation_paths.append(&mut SyncManager::copy(

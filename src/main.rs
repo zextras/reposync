@@ -1,16 +1,23 @@
 #![allow(missing_docs)]
+#[allow(clippy::all)]
 mod config;
+#[allow(clippy::all)]
 mod debian;
 mod destination;
 mod fetcher;
+#[allow(clippy::all)]
 mod locks;
+#[allow(clippy::all)]
 mod packages;
+#[allow(clippy::all)]
 mod redhat;
+mod retry;
 mod server;
+#[allow(clippy::all)]
 mod state;
+#[allow(clippy::all)]
 mod sync;
 mod utils;
-
 use crate::sync::SyncManager;
 use clap::{App, Arg};
 use std::process::exit;
@@ -19,7 +26,7 @@ fn main() {
     env_logger::init();
 
     let action_validator = |x: String| -> Result<(), String> {
-        if vec!["check", "sync", "server"].contains(&x.as_str()) {
+        if ["check", "sync", "server"].contains(&x.as_str()) {
             Ok(())
         } else {
             Err("only check, sync, server are valid actions".into())
@@ -62,7 +69,7 @@ fn main() {
 
     let result = config::load_config(config_file);
     if result.is_err() {
-        println!("{}", result.err().unwrap());
+        eprintln!("{}", result.err().unwrap());
         exit(1);
     }
     let config = result.unwrap();
@@ -71,33 +78,32 @@ fn main() {
     let dry_run = matches.is_present("dry-run");
     match action {
         "check" => {
-            println!("config file is correct");
+            log::info!("config file is correct");
             exit(0);
         }
         "sync" => {
             if let Some(repo_name) = matches.value_of("repository") {
-                let repo_names: Vec<String>;
-                if repo_name == "all" {
-                    repo_names = config.repo.iter().map(|r| r.name.clone()).collect();
+                let repo_names: Vec<String> = if repo_name == "all" {
+                    config.repo.iter().map(|r| r.name.clone()).collect()
                 } else {
-                    repo_names = vec![repo_name.into()]
-                }
+                    vec![repo_name.into()]
+                };
                 let sync_manager = SyncManager::new(config, dry_run);
                 for repo_name in repo_names {
                     let result = sync_manager.sync_repo(&repo_name);
                     if let Err(err) = result {
-                        println!("failed to synchronize {}: {}", repo_name, err);
+                        log::error!("failed to synchronize {}: {}", repo_name, err);
                         exit(1);
                     }
                     if dry_run {
-                        println!("{} dry-run complete", repo_name);
+                        log::info!("{} dry-run complete", repo_name);
                     } else {
-                        println!("{} fully synchronized", repo_name);
+                        log::info!("{} fully synchronized", repo_name);
                     }
                 }
                 exit(0);
             } else {
-                println!("missing argument repo");
+                log::error!("missing argument repo");
                 exit(1);
             }
         }
