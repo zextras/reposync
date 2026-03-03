@@ -51,6 +51,10 @@ fn main() {
                 .help("which repo to synchronize, check, sync, or server")
                 .takes_value(true)
                 .required(false),
+            Arg::with_name("dry-run")
+                .long("dry-run")
+                .help("show what would be done without making any changes")
+                .takes_value(false),
         ])
         .get_matches();
 
@@ -64,6 +68,7 @@ fn main() {
     let config = result.unwrap();
 
     let action = matches.value_of("action").unwrap();
+    let dry_run = matches.is_present("dry-run");
     match action {
         "check" => {
             println!("config file is correct");
@@ -77,14 +82,18 @@ fn main() {
                 } else {
                     repo_names = vec![repo_name.into()]
                 }
-                let sync_manager = SyncManager::new(config);
+                let sync_manager = SyncManager::new(config, dry_run);
                 for repo_name in repo_names {
                     let result = sync_manager.sync_repo(&repo_name);
                     if let Err(err) = result {
                         println!("failed to synchronize {}: {}", repo_name, err);
                         exit(1);
                     }
-                    println!("{} fully synchronized", repo_name);
+                    if dry_run {
+                        println!("{} dry-run complete", repo_name);
+                    } else {
+                        println!("{} fully synchronized", repo_name);
+                    }
                 }
                 exit(0);
             } else {
@@ -95,7 +104,7 @@ fn main() {
         "server" => {
             start_server(
                 &config.general.bind_address.clone(),
-                SyncManager::new(config),
+                SyncManager::new(config, false),
             );
         }
         _ => {

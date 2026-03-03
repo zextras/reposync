@@ -90,14 +90,15 @@ pub struct SyncManager {
     lock: Lock,
     time_provider: Arc<dyn TimeProvider>,
     sync_map: Arc<Mutex<BTreeMap<String, SyncStatus>>>,
+    dry_run: bool,
 }
 
 impl SyncManager {
-    pub fn new(config: Config) -> Self {
-        Self::new_internal(config, Lock::new(), Arc::new(RealTimeProvider {}))
+    pub fn new(config: Config, dry_run: bool) -> Self {
+        Self::new_internal(config, Lock::new(), Arc::new(RealTimeProvider {}), dry_run)
     }
 
-    fn new_internal(config: Config, lock: Lock, time_provider: Arc<dyn TimeProvider>) -> Self {
+    fn new_internal(config: Config, lock: Lock, time_provider: Arc<dyn TimeProvider>, dry_run: bool) -> Self {
         let mut map = BTreeMap::new();
         config.repo.iter().for_each(|r| {
             map.insert(
@@ -117,6 +118,7 @@ impl SyncManager {
             lock,
             time_provider,
             sync_map: Arc::new(Mutex::new(map)),
+            dry_run,
         }
     }
 
@@ -396,6 +398,29 @@ impl SyncManager {
             packages_delete_list.len(),
             index_delete_list.len()
         );
+
+        if self.dry_run {
+            println!("[dry-run] would copy {} packages:", packages_copy_list.len());
+            for op in &packages_copy_list {
+                let action = if op.is_replace { "replace" } else { "copy" };
+                println!("  {} {} ({} bytes)", action, op.path, op.size);
+            }
+            println!("[dry-run] would copy {} indexes:", index_copy_list.len());
+            for op in &index_copy_list {
+                let action = if op.is_replace { "replace" } else { "copy" };
+                println!("  {} {} ({} bytes)", action, op.path, op.size);
+            }
+            println!("[dry-run] would delete {} packages:", packages_delete_list.len());
+            for op in &packages_delete_list {
+                println!("  delete {}", op.path);
+            }
+            println!("[dry-run] would delete {} indexes:", index_delete_list.len());
+            for op in &index_delete_list {
+                println!("  delete {}", op.path);
+            }
+            println!("[dry-run] would update saved metadata");
+            return Ok(());
+        }
 
         println!("sync operation is atomic, either it's fully completed or will be performed from scratch");
 
@@ -766,6 +791,7 @@ pub mod tests {
             lock: Lock::new(),
             time_provider: Arc::new(RealTimeProvider {}),
             sync_map: Arc::new(Mutex::new(Default::default())),
+            dry_run: false,
         };
         let (repository, _saved_metadata_store) = sync_manager
             .load_current(&config.repo.get(0).unwrap())
@@ -796,6 +822,7 @@ pub mod tests {
             lock: Lock::new(),
             sync_map: Arc::new(Mutex::new(Default::default())),
             time_provider: Arc::new(RealTimeProvider {}),
+            dry_run: false,
         };
         sync_manager
             .sync_repo_internal(Box::new(mock_fetcher), &mut destination, repo_config)
@@ -962,7 +989,7 @@ pub mod tests {
             });
         }
 
-        let sync_manager = SyncManager::new_internal(config.clone(), Lock::new(), Arc::new(mock));
+        let sync_manager = SyncManager::new_internal(config.clone(), Lock::new(), Arc::new(mock), false);
 
         secs_offset.store(0, Ordering::SeqCst);
         {
