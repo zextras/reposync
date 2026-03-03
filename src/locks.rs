@@ -73,7 +73,7 @@ impl Lock {
         Lock::try_lock(&self.sync_locks, repo_name)
     }
 
-    pub fn lock_write(&self, repo_name: &str) -> MutexGuard<()> {
+    pub fn lock_write(&self, repo_name: &str) -> MutexGuard<'_, ()> {
         Lock::lock(&self.write_locks, repo_name)
     }
 

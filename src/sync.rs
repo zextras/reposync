@@ -376,7 +376,9 @@ impl SyncManager {
         let (packages_copy_list, packages_delete_list, index_copy_list, index_delete_list) =
             SyncManager::repo_diff(&repo, current_repo);
 
-        if packages_copy_list.is_empty() && index_copy_list.is_empty() {
+        if packages_copy_list.is_empty() && index_copy_list.is_empty()
+            && packages_delete_list.is_empty() && index_delete_list.is_empty()
+        {
             return Ok(());
         }
 
@@ -671,6 +673,17 @@ impl SyncManager {
                     .collect(),
             );
         }
+
+        // Bug fix: collect all package paths referenced by the NEW repo across ALL
+        // collections. A pool file that is still referenced by any collection must
+        // not be deleted, even if a single collection no longer lists it.
+        let all_new_package_paths: std::collections::HashSet<String> = repo
+            .collections
+            .iter()
+            .flat_map(|c| c.packages.iter().map(|p| p.path.clone()))
+            .collect();
+
+        packages_delete_list.retain(|d| !all_new_package_paths.contains(&d.path));
 
         (
             SyncManager::deduplicate_list(packages_copy_list),

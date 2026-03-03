@@ -1,57 +1,67 @@
 # RepoSync
 
-This software mirrors Debian and RedHat repositories to either an S3 bucket,
-with an optional CloudFront, or a local directory.
+Mirrors Debian and RedHat repositories to an S3 bucket (with optional CloudFront invalidation) or a local directory.
 
 No special access is required from the source repository.
 
----
-
 ## Features
-- RPM and DEB repository
-- CHECKSUM validation
-- signature validation
-- one time mirroring
-- server mode with anonymous API to trigger synchronizations
-- high consistency
-- single binary
 
-## Use cases
-We develop this software mainly for mirror repositories to S3/CloudFront, so we
-could leverage the simplicity of having a low-load repository with the availability of a 
-managed service.
-Another use case is to mirror repositories locally, allowing deployments within a closed network.
-
----
+- DEB and RPM repository mirroring
+- Checksum and PGP signature validation
+- One-shot sync or continuous server mode with HTTP API
+- Dry-run mode to preview changes without writing
+- CloudFront cache invalidation on sync
+- Cross-collection aware diffing (safe multi-distro pool handling)
+- Single statically-linked binary
 
 ## How it works
 
-### TLDR
-We ordered the operation specifically to reduce the effects when the synchronization is
-interrupted, in short as long as source packages are not modified we can guarantee consistency.
+Operations are ordered to minimize the impact of interrupted syncs. As long as source packages are not modified mid-sync, consistency is guaranteed.
 
-### Steps
-When a synchronization starts RepoSync downloads the indexes of the repository and compare them
-with the current ones, which are empty in the beginning, it creates an operation for each new,
-deleted, or modified package or index. It downloads one package at the time to reduce storage 
-requirements, validate it, and then write it in the destination repository. The procedure 
-writes and uploads indexes **after** all new packages are written, so every package referenced
-in the new index will be available right away.
-After the upload RepoSync invalidates modified files in CloudFront cache, if configured.
-Then RepoSync deletes old indexes and removed packages, as new indexes are already available,
-and as the final step it writes the new indexes locally the new indexes, which will be used on the
-next synchronization.
+### Sync steps
 
-If at any point during the synchronization a failure were to occur such as a checksum mismatch or a I/O
-error, RepoSync interrupts the synchronization, and delete downloaded indexes.
-For RepoSync the synchronization never happened, and will perform everything from scratch on the next 
-iteration.
+1. Download source repository indexes and diff against the last known state.
+2. For each new or modified package: download, validate checksum, write to destination.
+3. Upload new indexes **after** all packages are written — every package referenced in the new index is already available.
+4. Invalidate modified paths in CloudFront cache (if configured).
+5. Delete old indexes and removed packages.
+6. Persist the new indexes locally for the next sync cycle.
 
----
+If any step fails (checksum mismatch, I/O error, etc.) the sync is aborted and local state is not updated — the next run starts from scratch.
 
-## Help
+## Requirements
+
+- Rust >= 1.91 (aws-sdk crates requirement)
+- OpenSSL development headers (for building)
+
+## Build
+
 ```
-RepoSync 0.9
+make build          # debug
+make release        # release
+make test           # run tests
+make lint           # format check + clippy
+make help           # show all targets
+```
+
+Or directly with cargo:
+
+```
+cargo build --release
+```
+
+### Docker
+
+```
+make docker-build
+```
+
+Uses a multi-stage Alpine build (`deployment/Dockerfile`). The final image contains only the static binary, `ca-certificates`, `libgcc`, and `openssl`.
+
+## Usage
+
+```
+RepoSync 0.10.0
 Keep a repository synchronized to an S3 bucket
 
 USAGE:
@@ -60,43 +70,66 @@ USAGE:
 FLAGS:
     -h, --help       Prints help information
     -V, --version    Prints version information
+        --dry-run    Show what would be done without making any changes
 
 OPTIONS:
-        --repo <REPO>    which repo to synchronize, check, sync, or server
+        --repo <REPO>    Which repo to synchronize
 
 ARGS:
-    <CONFIG_FILE>    location of config file
-    <ACTION>         action to perform, 'check', 'sync' or 'server'
+    <CONFIG_FILE>    Location of config file
+    <ACTION>         Action to perform: 'check', 'sync', or 'server'
 ```
 
-## Check the configuration
+### Check the configuration
+
 ```
 $ reposync my-config.yaml check
 config file is correct
 ```
 
-## Synchronize directly a repository
+### Synchronize a repository
+
 ```
 $ reposync my-config.yaml sync --repo my-repo
 starting synchronization of my-repo
-requesting: https://repo.example.com/dists/xenial/Release
-requesting: https://repo.example.com/dists/xenial/InRelease
-requesting: https://repo.example.com/dists/xenial/Release.gpg
-requesting: https://repo.example.com/dists/xenial/main/binary-amd64/Packages
+requesting: https://repo.example.com/dists/jammy/Release
+requesting: https://repo.example.com/dists/jammy/InRelease
+requesting: https://repo.example.com/dists/jammy/Release.gpg
+requesting: https://repo.example.com/dists/jammy/main/binary-amd64/Packages
 ....
-requesting: https://repo.example.com/dists/bionic/test/binary-i386/Packages.gz
-repo fully synchronized
+my-repo fully synchronized
 ```
-_You can use `all` to synchronize all repositories._
 
-## Run in server mode
+Use `--repo all` to synchronize all configured repositories.
+
+### Dry-run
+
+```
+$ reposync my-config.yaml sync --repo my-repo --dry-run
+[DRY-RUN] would copy: pool/main/p/package_1.0_amd64.deb
+[DRY-RUN] would delete: pool/main/o/old-package_0.9_amd64.deb
+my-repo dry-run complete
+```
+
+### Run in server mode
+
 ```
 $ reposync my-config.yaml server
+starting http server, listening on 127.0.0.1:8080
 ```
 
-### Call the APIs
+#### HTTP API
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/health` | Health check (returns 200 or 503) |
+| `GET` | `/repository/{repo}` | Repository sync status |
+| `POST` | `/repository/{repo}/sync` | Trigger a synchronization |
+
+Example:
+
 ```
-$ wget --method=POST http://localhost:8080/repository/my-repo/sync -q -O - | jq .
+$ curl -s -X POST http://localhost:8080/repository/my-repo/sync | jq .
 {
   "name": "my-repo",
   "status": "syncing",
@@ -108,91 +141,60 @@ $ wget --method=POST http://localhost:8080/repository/my-repo/sync -q -O - | jq 
 }
 ```
 
----
+## Configuration
 
-## Config file
+See [samples/config.yaml](samples/config.yaml) for a complete example.
 
-see [a sample config](samples/config.yaml) for a complete sample.
-```
----
+```yaml
 general:
-# where to store every repository status
-  data_path: "/data/repo/"
-# used for temporary storage during synchronization
-  tmp_path: "/tmp/"
-# if run in server mode, where to bind the HTTP port to
-  bind_address: "127.0.0.1:8080"
-# timeout of HTTP requests
-  timeout: 60
-# max. amount of retries in case HTTP request fails
-  max_retries: 3
-# how many seconds to wait before trying again
-  retry_sleep: 5
-# refresh the repository at least every x minutes
-  min_sync_delay: 5
-# refresh the repository every x minutes, even if not requested
-  max_sync_delay: 30
+  data_path: "/data/repo/"         # repository state storage
+  tmp_path: "/tmp/repo/"           # temporary storage during sync
+  bind_address: "127.0.0.1:8080"   # server mode listen address
+  timeout: 60                      # HTTP request timeout (seconds)
+  max_retries: 3                   # retry count on HTTP failure
+  retry_sleep: 5                   # seconds between retries
+  min_sync_delay: 5                # minimum minutes between syncs
+  max_sync_delay: 30               # auto-sync interval (minutes)
+
 repo:
-# arbytrary name of the repository, exept 'all', which is reserved
-# multiple repositories can be specified
-  - name: my-redhat-repo
-# versions to fetch, only used for debian repositories
-    versions:
-      - xenial
-      - bionic
-      - focal
+  - name: my-repo
+    versions:                      # distro versions (debian only)
+      - jammy
+      - noble
     source:
-# either 'debian' or 'redhat' for deb or rpm repository
-      kind: debian
-# endpoint of the repository
-      endpoint: https://my-repo.example.com/RHEL/8/x86_64/stable/
-# optional username & password
-      username: username
-      password: password
-# or authorization_file, expected format username:password
-      authorization_file: /run/secrets/http_authorization
-# optional public pgp key, to validate the signature
+      kind: debian                 # 'debian' or 'redhat'
+      endpoint: https://repo.example.com/
+      # optional auth (pick one)
+      username: user
+      password: pass
+      authorization_file: /run/secrets/http_authorization  # format: user:pass
+      # optional PGP signature validation
       public_pgp_key: |
         -----BEGIN PGP PUBLIC KEY BLOCK-----
-        ....
+        ...
         -----END PGP PUBLIC KEY BLOCK-----
     destination:
-# only one destination must be specified, either local or s3
+      # local destination
       local:
-        path: "/my/repo/path"
+        path: "/var/lib/reposync/my-repo/"
+      # or S3 destination
       s3:
-# s3 endpoint, either use AWS or custom
-        s3_endpoint: https://s3.example.com/
-# s3 bucket
-        s3_bucket: "my-bucket"
-# region name, if using AWS, use official names
-        region_name: "custom"
-# path where to copy the repisotiry to
-        path: "/centos8/"
-# optional cloudfront endpoint & ARN resource ID
-        cloudfront_endpoint: https://cloudfront.amazonaws.com/
-        cloudfront_distribution_id: id
-# AWS credentials
-        access_key_id: key
+        s3_endpoint: https://s3.us-east-1.amazonaws.com/
+        s3_bucket: my-bucket
+        region_name: us-east-1
+        path: "/my-repo/"
+        access_key_id: AKIA...
         access_key_secret: secret
-# AWS credential file, expected format: {ACCESS_KEY_ID}\n{SECRET_ACCESS_KEY}
-        aws_credential_file: /run/secrets/aws_credential
-
-
+        aws_credential_file: /run/secrets/aws_credential  # format: KEY_ID\nSECRET
+        # optional CloudFront invalidation
+        cloudfront_endpoint: https://cloudfront.amazonaws.com/
+        cloudfront_distribution_id: E1234567890
 ```
 
-## S3 & CloudFront endpoints
+### S3 and CloudFront endpoints
 
-Check the official [S3 AWS endpoints](https://docs.aws.amazon.com/general/latest/gr/s3.html), [CloudFront AWS endpoints](https://docs.aws.amazon.com/general/latest/gr/cf_region.html), or provide a custom url.
+See [S3 endpoints](https://docs.aws.amazon.com/general/latest/gr/s3.html) and [CloudFront endpoints](https://docs.aws.amazon.com/general/latest/gr/cf_region.html), or provide a custom URL for S3-compatible storage.
 
----
-## Build 
-To build just run:
- ```cargo build --release```
- 
-## API & OpenAPI
-`./update.sh` is used to generate the `reposync-lib` from the [openapi schema](generated/api/openapi.yaml).
- 
-See generated [README](generated/README.md) for a complete list of HTTP APIs.
+## License
 
-To edit APIs [ApiCurio](https://studio.apicur.io/) was used.
+AGPL-3.0 — see [LICENSE](LICENSE).

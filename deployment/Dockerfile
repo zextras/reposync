@@ -1,9 +1,9 @@
-FROM alpine:latest AS builder
+FROM rust:1.93-alpine AS builder
 LABEL maintainer = "Golden Beatles <goldenbeatles@zextras.com>"
 LABEL description = "Reposync image"
 
 RUN \
-  apk add --no-cache cargo monit openssl-dev pkgconf
+  apk add --no-cache musl-dev openssl-dev pkgconf cmake make perl gcc
 
 COPY . /project
 WORKDIR /project
@@ -12,8 +12,6 @@ RUN \
 
 FROM alpine:latest
 COPY --from=builder /project/target/release/reposync /usr/bin/reposync
-COPY --from=builder /project/deployment/monitrc /etc/monitrc
-RUN chmod 700 /etc/monitrc
 RUN \
-  apk add --no-cache ca-certificates libgcc monit openssl
-ENTRYPOINT ["monit"]
+  apk add --no-cache ca-certificates libgcc openssl
+ENTRYPOINT ["reposync"]

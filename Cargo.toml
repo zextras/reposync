@@ -1,8 +1,8 @@
 [package]
 name = "reposync"
-version = "0.9.1"
+version = "0.10.0"
 authors = ["Davide Baldo <davide.baldo@zextras.com>"]
-edition = "2018"
+edition = "2021"
 
 [profile.release]
 panic = "abort"
@@ -11,42 +11,33 @@ panic = "abort"
 panic = "abort"
 
 [dependencies]
-reposync-lib = { path = "generated", version = "1.0.0", features = ["server"] }
-async-trait = "0.1.24"
+async-trait = "0.1"
+aws-config = { version = "1", features = ["behavior-version-latest"] }
+aws-sdk-cloudfront = "1"
+aws-sdk-s3 = "1"
+aws-smithy-types = "1"
+axum = "0.7"
 chrono = { version = "0.4", features = ["serde"] }
-futures = "0.3"
-swagger = "5.0.2"
-reqwest = { version = "0.11", features = ["json","blocking"] }
+clap = "2.33"
 data-encoding = "2.3"
-log = "0.4.0"
+env_logger = "0.11"
+flate2 = "1.0"
+futures = "0.3"
+log = "0.4"
 mime = "0.3"
+percent-encoding = "2.1"
+pgp = "0.14"
+regex = "1.3"
+reqwest = { version = "0.12", features = ["json", "blocking"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-serde_yaml = "0.8"
-hyper = {version = "0.13", optional = false}
-xml-rs = "0.8"
-serde_ignored = {version = "0.1.1", optional = false}
-url = {version = "2.1", optional = false}
-lazy_static = { version = "1.4", optional = false }
-percent-encoding = {version = "2.1.0", optional = false}
-regex = {version = "1.3", optional = false}
-frunk = { version = "0.3.0", optional = false }
-frunk_derives = { version = "0.3.0", optional = false }
-frunk_core = { version = "0.3.0", optional = false }
-frunk-enum-derive = { version = "0.2.0", optional = false }
-frunk-enum-core = { version = "0.2.0", optional = false }
-env_logger = "0.7"
-tokio = { version = "0.2", features = ["rt-threaded", "macros", "stream"] }
-clap = "2.33"
-bytes = "0.5.6"
+serde_yaml = "0.9"
+sha-1 = "0.10"
+sha2 = "0.10"
 tempfile = "3.2"
-sha-1 = "0.9"
-sha2 = "0.9"
-rusoto_cloudfront = "0.45"
-rusoto_s3 = "0.45"
-rusoto_core = "0.45"
-flate2 = "1.0"
-pgp = "0.7.1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+url = "2.1"
+xml-rs = "0.8"
 
 [dev-dependencies]
-mockall = "0.9"
+mockall = "0.13"

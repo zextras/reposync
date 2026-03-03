@@ -8,12 +8,6 @@ use std::io::{BufRead, BufReader, ErrorKind, Read};
 use std::rc::Rc;
 use std::str::FromStr;
 
-#[derive(Debug, Eq, PartialEq, Clone)]
-struct PackagesReference {
-    path: String,
-    size: usize,
-    sha256: String,
-}
 
 #[derive(Debug, Eq, PartialEq, Clone)]
 pub struct Release {

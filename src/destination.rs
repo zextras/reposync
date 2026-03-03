@@ -1,16 +1,12 @@
-use bytes::Bytes;
-use futures::future::Future;
-use futures::stream::Stream;
-use rusoto_cloudfront::{
-    CloudFront, CloudFrontClient, CreateInvalidationRequest, InvalidationBatch, Paths,
-};
-use rusoto_core::credential::StaticProvider;
-use rusoto_core::{region, HttpClient, Region};
-use rusoto_s3::{DeleteObjectRequest, PutObjectRequest, S3Client, StreamingBody, S3};
+use aws_sdk_cloudfront::types::{InvalidationBatch, Paths};
+use aws_sdk_s3::primitives::ByteStream;
 use std::fs::File;
-use std::io::{Error, ErrorKind, Read, Seek, SeekFrom};
-use std::pin::Pin;
-use std::task::{Context, Poll};
+use std::io::{Error, ErrorKind, Read};
+use std::path::Path;
+use std::thread::sleep;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+use crate::config::{DestinationConfig, GeneralConfig};
 
 pub trait Destination {
     fn upload(&mut self, path: &str, file: File) -> Result<(), std::io::Error>;
@@ -55,7 +51,7 @@ pub struct LocalDestination {
 
 impl LocalDestination {
     pub fn new(path: &str) -> Result<Self, std::io::Error> {
-        std::fs::create_dir_all(&path)?;
+        std::fs::create_dir_all(path)?;
         Ok(LocalDestination { path: path.into() })
     }
 }
@@ -66,7 +62,7 @@ impl Destination for LocalDestination {
         let path = Path::new(&s_path);
         println!("writing {}", &s_path);
         std::fs::create_dir_all(path.parent().unwrap())?;
-        let mut writer = File::create(&path)?;
+        let mut writer = File::create(path)?;
         std::io::copy(&mut file, &mut writer)?;
         Ok(())
     }
@@ -88,15 +84,13 @@ impl Destination for LocalDestination {
 
 pub struct S3Destination {
     pub path: String,
-    pub s3_endpoint: String,
     pub s3_bucket: String,
-    pub cloudfront_endpoint: Option<String>,
+    pub s3_endpoint: String,
     pub cloudfront_arn: Option<String>,
-    pub region_name: String,
-    pub access_key_id: String,
-    pub access_key_secret: String,
     pub max_retries: u32,
     pub retry_sleep: Duration,
+    s3_client: aws_sdk_s3::Client,
+    cloudfront_client: Option<aws_sdk_cloudfront::Client>,
 }
 
 impl S3Destination {
@@ -112,58 +106,55 @@ impl S3Destination {
         max_retries: u32,
         retry_sleep: Duration,
     ) -> S3Destination {
+        let s3_creds = aws_sdk_s3::config::Credentials::new(
+            access_key_id,
+            access_key_secret,
+            None,
+            None,
+            "reposync-static",
+        );
+        let s3_config = aws_sdk_s3::config::Builder::new()
+            .behavior_version(aws_sdk_s3::config::BehaviorVersion::latest())
+            .credentials_provider(s3_creds.clone())
+            .region(aws_sdk_s3::config::Region::new(region_name.to_string()))
+            .endpoint_url(s3_endpoint)
+            .force_path_style(true)
+            .build();
+        let s3_client = aws_sdk_s3::Client::from_conf(s3_config);
+
+        let cloudfront_client = if cloudfront_arn.is_some() {
+            let cf_endpoint = cloudfront_endpoint
+                .as_deref()
+                .unwrap_or("https://cloudfront.amazonaws.com");
+            let cf_creds = aws_sdk_cloudfront::config::Credentials::new(
+                access_key_id,
+                access_key_secret,
+                None,
+                None,
+                "reposync-static",
+            );
+            let cf_config = aws_sdk_cloudfront::config::Builder::new()
+                .behavior_version(aws_sdk_cloudfront::config::BehaviorVersion::latest())
+                .credentials_provider(cf_creds)
+                .region(aws_sdk_cloudfront::config::Region::new(
+                    "us-east-1".to_string(),
+                ))
+                .endpoint_url(cf_endpoint)
+                .build();
+            Some(aws_sdk_cloudfront::Client::from_conf(cf_config))
+        } else {
+            None
+        };
+
         Self {
             path: path.into(),
-            s3_endpoint: s3_endpoint.into(),
             s3_bucket: s3_bucket.into(),
-            cloudfront_endpoint: cloudfront_endpoint.clone(),
-            cloudfront_arn: cloudfront_arn.clone(),
-            region_name: region_name.into(),
-            access_key_id: access_key_id.into(),
-            access_key_secret: access_key_secret.into(),
+            s3_endpoint: s3_endpoint.into(),
+            cloudfront_arn,
             max_retries,
             retry_sleep,
-        }
-    }
-
-    fn s3_client(&mut self) -> S3Client {
-        let request_dispatcher = HttpClient::new().expect("failed to create request dispatcher");
-        let credential_provider = StaticProvider::new(
-            self.access_key_id.clone(),
-            self.access_key_secret.clone(),
-            None,
-            None,
-        );
-        rusoto_s3::S3Client::new_with(
-            request_dispatcher,
-            credential_provider,
-            self.region(&self.region_name, &self.s3_endpoint),
-        )
-    }
-
-    fn cloudfront_client(&mut self) -> Option<CloudFrontClient> {
-        if self.cloudfront_arn.is_none() {
-            return None;
-        }
-
-        let request_dispatcher = HttpClient::new().expect("failed to create request dispatcher");
-        let credential_provider = StaticProvider::new(
-            self.access_key_id.clone(),
-            self.access_key_secret.clone(),
-            None,
-            None,
-        );
-        Some(rusoto_cloudfront::CloudFrontClient::new_with(
-            request_dispatcher,
-            credential_provider,
-            self.region("us-east-1", &self.cloudfront_endpoint.clone().unwrap()),
-        ))
-    }
-
-    fn region(&self, name: &str, endpoint: &str) -> Region {
-        region::Region::Custom {
-            name: name.into(),
-            endpoint: endpoint.into(),
+            s3_client,
+            cloudfront_client,
         }
     }
 
@@ -176,29 +167,33 @@ impl S3Destination {
     }
 }
 
-#[tokio::main]
-async fn await_for<F, T>(future: F) -> T
-where
-    F: Future<Output = T>,
-{
-    future.await
+/// Helper: run an async future on the current thread using a one-shot tokio
+/// runtime.  The callers (upload / delete / invalidate) are invoked from
+/// synchronous code so we cannot simply `.await`.
+fn block_on<F: std::future::Future>(future: F) -> F::Output {
+    match tokio::runtime::Handle::try_current() {
+        Ok(h) => h.block_on(future),
+        Err(_) => tokio::runtime::Runtime::new()
+            .expect("failed to create tokio runtime")
+            .block_on(future),
+    }
 }
 
 impl Destination for S3Destination {
-    fn upload(&mut self, path: &str, file: File) -> Result<(), Error> {
+    fn upload(&mut self, path: &str, mut file: File) -> Result<(), Error> {
         let mut err: Option<Error> = None;
-
-        let client = self.s3_client();
-        let len = Some(file.metadata()?.len() as i64);
 
         for n in 0..self.max_retries {
             if n > 0 {
                 sleep(self.retry_sleep);
                 println!("Failed, retrying in {}s...", self.retry_sleep.as_secs());
             }
-            let mut file = file.try_clone().expect("cannot duplicate file descriptor");
-            file.seek(SeekFrom::Start(0))?;
-            let body = StreamingBody::new(FileAdapter { file });
+
+            // Read file into memory for the upload body
+            let mut buf = Vec::new();
+            file.seek_to_start()?;
+            file.read_to_end(&mut buf)?;
+            let body = ByteStream::from(buf);
 
             println!(
                 "uploading {}/{}/{}",
@@ -206,21 +201,24 @@ impl Destination for S3Destination {
                 self.s3_bucket,
                 &self.s3_path(path)
             );
-            let result = await_for(client.put_object(PutObjectRequest {
-                bucket: self.s3_bucket.clone(),
-                key: self.s3_path(path),
-                body: Some(body),
-                content_length: len,
-                ..Default::default()
-            }));
 
-            if result.is_err() {
-                err = Some(std::io::Error::new(
-                    ErrorKind::Other,
-                    format!("upload failed: {}", result.err().unwrap().to_string()),
-                ));
-            } else {
-                return Ok(());
+            let result = block_on(
+                self.s3_client
+                    .put_object()
+                    .bucket(&self.s3_bucket)
+                    .key(self.s3_path(path))
+                    .body(body)
+                    .send(),
+            );
+
+            match result {
+                Ok(_) => return Ok(()),
+                Err(e) => {
+                    err = Some(std::io::Error::new(
+                        ErrorKind::Other,
+                        format!("upload failed: {}", e),
+                    ));
+                }
             }
         }
 
@@ -229,7 +227,6 @@ impl Destination for S3Destination {
 
     fn delete(&mut self, path: &str) -> Result<(), Error> {
         let mut err: Option<Error> = None;
-        let client = self.s3_client();
 
         for n in 0..self.max_retries {
             if n > 0 {
@@ -242,20 +239,23 @@ impl Destination for S3Destination {
                 self.s3_bucket,
                 self.s3_path(path)
             );
-            let future = client.delete_object(DeleteObjectRequest {
-                bucket: self.s3_bucket.clone(),
-                key: self.s3_path(path),
-                ..Default::default()
-            });
 
-            let result = await_for(future);
-            if result.is_err() {
-                err = Some(std::io::Error::new(
-                    ErrorKind::Other,
-                    format!("delete failed: {}", result.err().unwrap().to_string()),
-                ));
-            } else {
-                return Ok(());
+            let result = block_on(
+                self.s3_client
+                    .delete_object()
+                    .bucket(&self.s3_bucket)
+                    .key(self.s3_path(path))
+                    .send(),
+            );
+
+            match result {
+                Ok(_) => return Ok(()),
+                Err(e) => {
+                    err = Some(std::io::Error::new(
+                        ErrorKind::Other,
+                        format!("delete failed: {}", e),
+                    ));
+                }
             }
         }
 
@@ -263,63 +263,81 @@ impl Destination for S3Destination {
     }
 
     fn invalidate(&mut self, paths: Vec<String>) -> Result<(), Error> {
-        if let Some(client) = self.cloudfront_client() {
-            let mut err: Option<Error> = None;
-            if !paths.is_empty() {
-                for n in 0..self.max_retries {
-                    if n > 0 {
-                        sleep(self.retry_sleep);
-                        println!("Failed, retrying in {}s...", self.retry_sleep.as_secs());
-                    }
-                    for path in &paths {
-                        println!("invalidating {}", path);
-                    }
-
-                    let future = client.create_invalidation(CreateInvalidationRequest {
-                        distribution_id: self.cloudfront_arn.clone().unwrap(),
-                        invalidation_batch: InvalidationBatch {
-                            caller_reference: SystemTime::now()
-                                .duration_since(UNIX_EPOCH)
-                                .unwrap()
-                                .as_millis()
-                                .to_string(),
-                            paths: Paths {
-                                quantity: paths.len() as i64,
-                                items: Some(
-                                    paths
-                                        .iter()
-                                        .map(|path| format!("/{}", self.s3_path(path)))
-                                        .collect::<Vec<String>>(),
-                                ),
-                            },
-                        },
-                    });
-
-                    let result = await_for(future);
-                    if result.is_err() {
-                        err = Some(std::io::Error::new(
-                            ErrorKind::Other,
-                            format!(
-                                "cloudfront invalidation failed: {}",
-                                result.err().unwrap().to_string()
-                            ),
-                        ));
-                    } else {
-                        return Ok(());
-                    }
+        let client = match &self.cloudfront_client {
+            Some(c) => c,
+            None => {
+                for path in paths {
+                    println!("skipping cloudfront invalidation for {}", path);
                 }
-
-                Err(err.unwrap())
-            } else {
-                Ok(())
+                return Ok(());
             }
-        } else {
-            for path in paths {
-                println!("skipping cloudfront invalidation for {}", path);
-            }
+        };
 
-            Ok(())
+        if paths.is_empty() {
+            return Ok(());
         }
+
+        let mut err: Option<Error> = None;
+
+        for n in 0..self.max_retries {
+            if n > 0 {
+                sleep(self.retry_sleep);
+                println!("Failed, retrying in {}s...", self.retry_sleep.as_secs());
+            }
+            for path in &paths {
+                println!("invalidating {}", path);
+            }
+
+            let items: Vec<String> = paths
+                .iter()
+                .map(|p| format!("/{}", self.s3_path(p)))
+                .collect();
+
+            let invalidation_paths = Paths::builder()
+                .quantity(paths.len() as i32)
+                .set_items(Some(items))
+                .build()
+                .map_err(|e| {
+                    std::io::Error::new(ErrorKind::Other, format!("failed to build Paths: {}", e))
+                })?;
+
+            let batch = InvalidationBatch::builder()
+                .caller_reference(
+                    SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap()
+                        .as_millis()
+                        .to_string(),
+                )
+                .paths(invalidation_paths)
+                .build()
+                .map_err(|e| {
+                    std::io::Error::new(
+                        ErrorKind::Other,
+                        format!("failed to build InvalidationBatch: {}", e),
+                    )
+                })?;
+
+            let result = block_on(
+                client
+                    .create_invalidation()
+                    .distribution_id(self.cloudfront_arn.clone().unwrap())
+                    .invalidation_batch(batch)
+                    .send(),
+            );
+
+            match result {
+                Ok(_) => return Ok(()),
+                Err(e) => {
+                    err = Some(std::io::Error::new(
+                        ErrorKind::Other,
+                        format!("cloudfront invalidation failed: {}", e),
+                    ));
+                }
+            }
+        }
+
+        Err(err.unwrap())
     }
 
     fn name(&self) -> String {
@@ -327,42 +345,21 @@ impl Destination for S3Destination {
     }
 }
 
-struct FileAdapter {
-    file: File,
+/// Extension trait to seek a File to the beginning.
+trait SeekToStart {
+    fn seek_to_start(&mut self) -> Result<(), Error>;
 }
 
-impl Stream for FileAdapter {
-    type Item = Result<Bytes, std::io::Error>;
-
-    fn poll_next(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        let mut buffer: [u8; 4096] = [0; 4096];
-        let result = self.get_mut().file.read(&mut buffer);
-        if result.is_err() {
-            return Poll::Ready(Some(Err(result.err().unwrap())));
-        }
-        let size = result.unwrap();
-        if size == 0 {
-            return Poll::Ready(None);
-        }
-        let bytes = Bytes::from(buffer[0..size].to_vec());
-        Poll::Ready(Some(Ok(bytes)))
-    }
-
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        if let Ok(metadata) = self.file.metadata() {
-            (metadata.len() as usize, Some(metadata.len() as usize))
-        } else {
-            (0, None)
-        }
+impl SeekToStart for File {
+    fn seek_to_start(&mut self) -> Result<(), Error> {
+        use std::io::{Seek, SeekFrom};
+        self.seek(SeekFrom::Start(0))?;
+        Ok(())
     }
 }
 
-use crate::config::{DestinationConfig, GeneralConfig};
 #[cfg(test)]
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::Path;
-use std::thread::sleep;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 #[cfg(test)]
 pub struct MemoryDestination {

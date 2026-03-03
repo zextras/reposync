@@ -27,7 +27,7 @@ fn main() {
     };
 
     let matches = App::new("RepoSync")
-        .version("0.9")
+        .version("0.10.0")
         .about("Keep a repository synchronized to an S3 bucket")
         .args(&[
             Arg::with_name("config")
@@ -58,7 +58,7 @@ fn main() {
 
     let result = config::load_config(config_file);
     if result.is_err() {
-        println!("{}", result.err().unwrap().to_string());
+        println!("{}", result.err().unwrap());
         exit(1);
     }
     let config = result.unwrap();
@@ -81,7 +81,7 @@ fn main() {
                 for repo_name in repo_names {
                     let result = sync_manager.sync_repo(&repo_name);
                     if let Err(err) = result {
-                        println!("failed to synchronize {}: {}", repo_name, err.to_string());
+                        println!("failed to synchronize {}: {}", repo_name, err);
                         exit(1);
                     }
                     println!("{} fully synchronized", repo_name);
@@ -93,16 +93,10 @@ fn main() {
             }
         }
         "server" => {
-            let result = start_server(
+            start_server(
                 &config.general.bind_address.clone(),
                 SyncManager::new(config),
             );
-            if let Err(err) = result {
-                println!("cannot start http server: {}", err);
-                exit(1);
-            } else {
-                exit(0);
-            }
         }
         _ => {
             panic!("unknown action {}", action);
@@ -111,6 +105,6 @@ fn main() {
 }
 
 #[tokio::main]
-async fn start_server(bind_address: &str, sync_manager: SyncManager) -> hyper::Result<()> {
-    server::create(sync_manager, &bind_address).await
+async fn start_server(bind_address: &str, sync_manager: SyncManager) {
+    server::create(sync_manager, bind_address).await
 }
