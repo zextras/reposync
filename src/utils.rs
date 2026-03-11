@@ -9,7 +9,7 @@ pub fn add_optional_index<T>(
     signature: Signature,
 ) -> Result<Option<Box<dyn Read>>, std::io::Error>
 where
-    T: RepoMetadataStore,
+    T: RepoMetadataStore + ?Sized,
 {
     match state.fetch(path) {
         Err(err) => {
@@ -20,18 +20,18 @@ where
             }
         }
         Ok((disk_path, mut reader, size)) => {
-        indexes.insert(
-            0,
-            IndexFile {
-                file_path: disk_path,
-                path: path.into(),
-                size,
-                hash: Hash::create_sha256_hash(&mut reader)?,
-                signature,
-            },
-        );
+            indexes.insert(
+                0,
+                IndexFile {
+                    file_path: disk_path,
+                    path: path.into(),
+                    size,
+                    hash: Hash::create_sha256_hash(&mut reader)?,
+                    signature,
+                },
+            );
 
-        Ok(Some(state.read(path).unwrap().unwrap()))
+            Ok(Some(state.read(path).unwrap().unwrap()))
         }
     }
 }

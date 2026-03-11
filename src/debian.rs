@@ -8,7 +8,6 @@ use std::io::{BufRead, BufReader, ErrorKind, Read};
 use std::rc::Rc;
 use std::str::FromStr;
 
-
 #[derive(Debug, Eq, PartialEq, Clone)]
 pub struct Release {
     pub codename: String,
@@ -49,6 +48,18 @@ pub fn load_repository(
     Ok((result.unwrap(), repo_metadata))
 }
 
+/// Load the current repository state from an arbitrary `RepoMetadataStore`.
+/// Used when the store is S3 (so we read the last-synced indexes straight from
+/// the destination bucket instead of from a local disk copy).
+pub fn load_repository_with_store(
+    store: &dyn RepoMetadataStore,
+    config: &RepositoryConfig,
+) -> Result<Repository, std::io::Error> {
+    fetch_repository_internal(store, config, true).map_err(|e| {
+        std::io::Error::new(e.kind(), format!("cannot load current repo state: {}", e))
+    })
+}
+
 //internal function for dependency injection
 fn fetch_repository_internal<T>(
     state: &T,
@@ -56,7 +67,7 @@ fn fetch_repository_internal<T>(
     allow_empty: bool,
 ) -> Result<Repository, std::io::Error>
 where
-    T: RepoMetadataStore,
+    T: RepoMetadataStore + ?Sized,
 {
     let mut repo = Repository {
         name: config.name.clone(),

@@ -35,9 +35,7 @@ pub async fn create(sync_manager: SyncManager, addr: &str) {
         .await
         .expect("Failed to bind address");
     log::info!("starting http server, listening on {}", addr);
-    axum::serve(listener, app)
-        .await
-        .expect("HTTP server error");
+    axum::serve(listener, app).await.expect("HTTP server error");
 }
 
 fn normalize(system_time: &SystemTime) -> i64 {
@@ -46,8 +44,7 @@ fn normalize(system_time: &SystemTime) -> i64 {
 
 fn get_repo_status(sync_manager: &SyncManager, repo_name: &str) -> Option<Status> {
     let result = sync_manager.load_current_by_name(repo_name);
-    if let Ok(Some(result)) = result {
-        let (repo, _metadata) = result;
+    if let Ok(Some(repo)) = result {
         if let Some(sync_state) = sync_manager.get_status(&repo.name) {
             Some(Status {
                 status: sync_state.current.to_string(),
@@ -100,7 +97,6 @@ async fn repository_repo_sync_post(
         Err(StatusCode::NOT_FOUND)
     }
 }
-
 
 #[cfg(test)]
 mod tests {

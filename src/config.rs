@@ -130,7 +130,11 @@ pub struct RepositoryConfig {
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct GeneralConfig {
-    pub data_path: String,
+    /// Local path for persisting repo index state between syncs.
+    /// Required only when using a `local` destination; S3 destinations read
+    /// state directly from the bucket so no local storage is needed.
+    #[serde(default)]
+    pub data_path: Option<String>,
     pub tmp_path: String,
     pub bind_address: String,
     pub timeout: u32,
@@ -165,8 +169,13 @@ pub fn load_config(path: &str) -> Result<Config, String> {
         ));
     }
 
-    //normalize slashes
+    //normalize slashes and validate
     let mut config: Config = config_result.unwrap();
+
+    let has_local_destination = config.repo.iter().any(|r| r.destination.local.is_some());
+    if has_local_destination && config.general.data_path.is_none() {
+        return Err("general.data_path is required when using a local destination".to_string());
+    }
     for repo in &mut config.repo {
         repo.source.endpoint = remove_trailing_slash(&repo.source.endpoint);
         if repo.destination.s3.is_some() {
@@ -287,7 +296,7 @@ pub mod tests {
     #[test]
     fn load_sample_config() {
         let config = load_config("samples/config.yaml").unwrap();
-        assert_eq!("/data/repo/", config.general.data_path);
+        assert_eq!(Some("/data/repo/".to_string()), config.general.data_path);
         assert_eq!(2, config.repo.len());
         let repo0 = config.repo.get(0).unwrap();
         assert_eq!("centos8", repo0.name);
