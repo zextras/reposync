@@ -66,12 +66,12 @@ impl Fetcher for DirectFetcher {
         log::debug!("requesting: {}", url);
         let builder = Client::builder();
         let mut headers = header::HeaderMap::new();
-        if self.secret.is_some() {
+        if let Some(secret) = &self.secret {
             let mut auth_value = header::HeaderValue::from_str(&format!(
                 "Basic {}",
-                BASE64.encode(self.secret.clone().unwrap().as_bytes(),)
+                BASE64.encode(secret.as_bytes())
             ))
-            .expect("cannot crate authorization header");
+            .expect("cannot create authorization header");
             auth_value.set_sensitive(true);
             headers.insert(header::AUTHORIZATION, auth_value);
         }

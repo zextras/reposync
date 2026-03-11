@@ -150,8 +150,7 @@ impl SyncManager {
         });
     }
 
-    ///returns true if all paths in the configuration are accessible
-    ///returns true if all paths in the configuration are accessible
+    /// Returns true if all paths in the configuration are accessible.
     pub fn check_permissions(&self) -> Result<(), std::io::Error> {
         if let Some(data_path) = &self.config.general.data_path {
             Self::check_writable(data_path)?;
@@ -312,14 +311,12 @@ impl SyncManager {
 
     pub fn sync_repo(&self, repo_name: &str) -> Result<(), std::io::Error> {
         log::info!("starting synchronization of {}", repo_name);
-        let repo_config = self.get_repo_config(repo_name);
-        if repo_config.is_none() {
-            return Err(std::io::Error::new(
+        let repo_config = self.get_repo_config(repo_name).ok_or_else(|| {
+            std::io::Error::new(
                 ErrorKind::NotFound,
                 format!("repository {} not found", repo_name),
-            ));
-        }
-        let repo_config = repo_config.unwrap();
+            )
+        })?;
 
         let fetcher = fetcher::create_chain(
             self.config.general.max_retries,
@@ -365,18 +362,15 @@ impl SyncManager {
         if let Some(public_key) = public_key {
             for index in repo.collections.iter().map(|c| &c.indexes).flatten() {
                 let mut reader = File::open(&index.file_path).expect("cannot open stored index");
-                let result = index.signature.matches(&public_key, &mut reader);
-                if result.is_err() {
-                    let err = result.err().unwrap();
-                    return Err(std::io::Error::new(
-                        ErrorKind::InvalidData,
-                        format!(
-                            "cannot validate signature of '{}': {}",
-                            &index.path,
-                            err.to_string()
-                        ),
-                    ));
-                }
+                index
+                    .signature
+                    .matches(&public_key, &mut reader)
+                    .map_err(|err| {
+                        std::io::Error::new(
+                            ErrorKind::InvalidData,
+                            format!("cannot validate signature of '{}': {}", &index.path, err),
+                        )
+                    })?;
             }
         } else {
             log::warn!("no public pgp key provided, skipping metadata signature validation")
@@ -522,39 +516,28 @@ impl SyncManager {
         std::fs::create_dir_all(tmp_path).expect("unable to create tmp_path");
 
         for operation in copy_list {
-            let mut tmp_file;
-            if operation.local_file.is_some() {
-                let result = File::open(operation.local_file.clone().unwrap());
-                if let Err(err) = result {
-                    return Err(std::io::Error::new(
+            let mut tmp_file = if let Some(local_file) = &operation.local_file {
+                File::open(local_file).map_err(|err| {
+                    std::io::Error::new(
                         err.kind(),
-                        format!(
-                            "cannot copy file '{}': {}",
-                            &operation.local_file.clone().unwrap(),
-                            err.to_string()
-                        ),
-                    ));
-                }
-                tmp_file = result.unwrap();
+                        format!("cannot copy file '{}': {}", local_file, err),
+                    )
+                })?
             } else {
-                let fetch_result =
-                    fetcher.fetch(&format!("{}/{}", source_endpoint, operation.path));
-                if fetch_result.is_err() {
-                    return Err(std::io::Error::new(
-                        ErrorKind::Other,
-                        format!(
-                            "cannot copy file '{}': {}",
-                            operation.path,
-                            fetch_result.err().unwrap().error
-                        ),
-                    ));
-                }
-                let mut reader = fetch_result.unwrap();
-                tmp_file = tempfile::tempfile_in(tmp_path).expect("cannot create tmp file");
-                let _ = std::io::copy(&mut reader, &mut tmp_file)?;
-                tmp_file.flush()?;
-                tmp_file.seek(SeekFrom::Start(0))?;
-            }
+                let mut reader = fetcher
+                    .fetch(&format!("{}/{}", source_endpoint, operation.path))
+                    .map_err(|e| {
+                        std::io::Error::new(
+                            ErrorKind::Other,
+                            format!("cannot copy file '{}': {}", operation.path, e.error),
+                        )
+                    })?;
+                let mut f = tempfile::tempfile_in(tmp_path).expect("cannot create tmp file");
+                std::io::copy(&mut reader, &mut f)?;
+                f.flush()?;
+                f.seek(SeekFrom::Start(0))?;
+                f
+            };
 
             if !operation.hash.matches(&mut tmp_file)? {
                 return Err(std::io::Error::new(

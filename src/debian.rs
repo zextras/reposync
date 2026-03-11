@@ -112,33 +112,25 @@ where
         )?;
 
         let mut reader = state.read(&path)?.unwrap();
-        if signature.is_some() {
+        let sig_variant = if let Some(mut sig_reader) = signature {
             let mut text_signature = String::new();
-            signature.unwrap().read_to_string(&mut text_signature)?;
-            indexes.insert(
-                0,
-                IndexFile {
-                    file_path: disk_path,
-                    path,
-                    size,
-                    hash: Hash::create_sha256_hash(&mut reader)?,
-                    signature: Signature::PGPExternal {
-                        signature: text_signature,
-                    },
-                },
-            );
+            sig_reader.read_to_string(&mut text_signature)?;
+            Signature::PGPExternal {
+                signature: text_signature,
+            }
         } else {
-            indexes.insert(
-                0,
-                IndexFile {
-                    file_path: disk_path,
-                    path,
-                    size,
-                    hash: Hash::create_sha256_hash(&mut reader)?,
-                    signature: Signature::None,
-                },
-            );
-        }
+            Signature::None
+        };
+        indexes.insert(
+            0,
+            IndexFile {
+                file_path: disk_path,
+                path,
+                size,
+                hash: Hash::create_sha256_hash(&mut reader)?,
+                signature: sig_variant,
+            },
+        );
 
         let mut packages: Vec<Package> = Vec::new();
 
@@ -195,8 +187,8 @@ where
             break;
         }
 
-        let line = String::from_utf8(buffer).unwrap().replace("\n", "");
-        if line.starts_with(" ") {
+        let line = String::from_utf8(buffer).unwrap().replace('\n', "");
+        if line.starts_with(' ') {
             if parsing_sha256 {
                 let re = Regex::new(" *([a-z0-9]+) *([0-9]+) *(.*)").unwrap();
                 if let Some(group) = re.captures(&line) {
@@ -316,7 +308,7 @@ where
             break;
         }
 
-        let line = String::from_utf8(buffer).unwrap().replace("\n", "");
+        let line = String::from_utf8(buffer).unwrap().replace('\n', "");
 
         if line.is_empty() {
             check_and_add(&mut key, &mut value, &mut current)?;

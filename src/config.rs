@@ -16,17 +16,13 @@ pub struct SourceConfig {
 
 impl SourceConfig {
     pub fn get_authorization_secret(&self) -> Result<Option<String>, std::io::Error> {
-        if self.username.is_some() && self.password.is_some() {
-            return Ok(Some(format!(
-                "{}:{}",
-                self.username.clone().unwrap(),
-                self.password.clone().unwrap()
-            )));
+        if let (Some(username), Some(password)) = (&self.username, &self.password) {
+            return Ok(Some(format!("{}:{}", username, password)));
         }
 
-        if self.authorization_file.is_some() {
+        if let Some(auth_file) = &self.authorization_file {
             let mut text = String::new();
-            File::open(&self.authorization_file.clone().unwrap())?.read_to_string(&mut text)?;
+            File::open(auth_file)?.read_to_string(&mut text)?;
             return Ok(Some(text.replace('\n', "").replace('\r', "")));
         }
 
@@ -34,17 +30,13 @@ impl SourceConfig {
     }
 
     pub fn parse_public_key(&self) -> Result<Option<SignedPublicKey>, std::io::Error> {
-        if self.public_pgp_key.is_some() {
-            let result = SignedPublicKey::from_string(&self.public_pgp_key.clone().unwrap());
-            if result.is_err() {
-                let err = result.err().unwrap();
-                return Err(std::io::Error::new(
+        if let Some(key_str) = &self.public_pgp_key {
+            let (public_key, _) = SignedPublicKey::from_string(key_str).map_err(|err| {
+                std::io::Error::new(
                     ErrorKind::InvalidData,
                     format!("cannot parse public key: {}", err.as_code()),
-                ));
-            }
-
-            let (public_key, _) = result.unwrap();
+                )
+            })?;
             Ok(Some(public_key))
         } else {
             Ok(None)
@@ -79,42 +71,30 @@ pub struct DestinationConfig {
 impl S3Destination {
     ///returns (access_key_id,access_key_secret)
     pub fn get_aws_credentials(&self) -> Result<(String, String), std::io::Error> {
-        if self.access_key_id.is_some() && self.access_key_secret.is_some() {
-            Ok((
-                self.access_key_id.clone().unwrap(),
-                self.access_key_secret.clone().unwrap(),
-            ))
-        } else {
-            if self.aws_credential_file.is_some() {
-                let mut text = String::new();
-                File::open(&self.aws_credential_file.clone().unwrap())?
-                    .read_to_string(&mut text)?;
-                let vec: Vec<&str> = text.splitn(2, "\n").collect();
-                if vec.len() == 2 {
-                    Ok((
-                        vec.get(0)
-                            .unwrap()
-                            .to_string()
-                            .replace('\n', "")
-                            .replace('\r', ""),
-                        vec.get(1)
-                            .unwrap()
-                            .to_string()
-                            .replace('\n', "")
-                            .replace('\r', ""),
-                    ))
-                } else {
-                    Err(Error::new(
-                        ErrorKind::InvalidInput,
-                        "invalid aws credential file, expected: \"access_key_id\naccess_key_secret\"",
-                    ))
-                }
+        if let (Some(id), Some(secret)) = (&self.access_key_id, &self.access_key_secret) {
+            return Ok((id.clone(), secret.clone()));
+        }
+
+        if let Some(cred_file) = &self.aws_credential_file {
+            let mut text = String::new();
+            File::open(cred_file)?.read_to_string(&mut text)?;
+            let vec: Vec<&str> = text.splitn(2, '\n').collect();
+            if vec.len() == 2 {
+                Ok((
+                    vec[0].replace('\n', "").replace('\r', ""),
+                    vec[1].replace('\n', "").replace('\r', ""),
+                ))
             } else {
                 Err(Error::new(
                     ErrorKind::InvalidInput,
-                    "missing aws credential",
+                    "invalid aws credential file, expected: \"access_key_id\naccess_key_secret\"",
                 ))
             }
+        } else {
+            Err(Error::new(
+                ErrorKind::InvalidInput,
+                "missing aws credential",
+            ))
         }
     }
 }
@@ -151,49 +131,29 @@ pub struct Config {
 }
 
 pub fn load_config(path: &str) -> Result<Config, String> {
-    let text = fs::read_to_string(path);
-    if text.is_err() {
-        return Result::Err(format!(
-            "Cannot read file {}: {}",
-            path,
-            text.err().unwrap().to_string()
-        ));
-    }
+    let text = fs::read_to_string(path).map_err(|e| format!("Cannot read file {}: {}", path, e))?;
 
-    let config_result = serde_yaml::from_str(&text.unwrap());
-    if config_result.is_err() {
-        return Result::Err(format!(
-            "Cannot parse file {}: {}",
-            path,
-            config_result.err().unwrap().to_string()
-        ));
-    }
-
-    //normalize slashes and validate
-    let mut config: Config = config_result.unwrap();
+    let mut config: Config =
+        serde_yaml::from_str(&text).map_err(|e| format!("Cannot parse file {}: {}", path, e))?;
 
     let has_local_destination = config.repo.iter().any(|r| r.destination.local.is_some());
     if has_local_destination && config.general.data_path.is_none() {
         return Err("general.data_path is required when using a local destination".to_string());
     }
+
+    //normalize slashes
     for repo in &mut config.repo {
         repo.source.endpoint = remove_trailing_slash(&repo.source.endpoint);
-        if repo.destination.s3.is_some() {
-            let mut s3 = repo.destination.s3.clone().unwrap();
+        if let Some(s3) = repo.destination.s3.as_mut() {
             s3.s3_endpoint = remove_trailing_slash(&s3.s3_endpoint);
             s3.path = remove_initial_slash(&remove_trailing_slash(&s3.path));
-            if s3.cloudfront_endpoint.is_some() {
-                s3.cloudfront_endpoint = Some(remove_trailing_slash(
-                    &s3.cloudfront_endpoint.clone().unwrap(),
-                ));
+            if let Some(cf_endpoint) = &s3.cloudfront_endpoint {
+                s3.cloudfront_endpoint = Some(remove_trailing_slash(cf_endpoint));
             }
-            repo.destination.s3 = Some(s3);
         }
 
-        if repo.destination.local.is_some() {
-            let mut local = repo.destination.local.clone().unwrap();
+        if let Some(local) = repo.destination.local.as_mut() {
             local.path = remove_trailing_slash(&local.path);
-            repo.destination.local = Some(local);
         }
     }
 
@@ -201,12 +161,10 @@ pub fn load_config(path: &str) -> Result<Config, String> {
     let mut used_names: Vec<&String> = vec![];
     for repo in &config.repo {
         if repo.name == "all" {
-            return Result::Err(format!(
-                "'all' was used as repository name, but it's a reserved word'",
-            ));
+            return Err("'all' was used as repository name, but it's a reserved word'".to_string());
         }
         if used_names.contains(&&repo.name) {
-            return Result::Err(format!(
+            return Err(format!(
                 "'{}' was used as repository name twice",
                 &repo.name
             ));
@@ -214,78 +172,56 @@ pub fn load_config(path: &str) -> Result<Config, String> {
         used_names.push(&repo.name);
 
         if !["debian", "redhat"].contains(&repo.source.kind.as_str()) {
-            return Result::Err(format!(
+            return Err(format!(
                 "unknown repository type '{}', only 'debian' and 'redhat' are supported",
                 &repo.source.kind
             ));
         }
 
         if let Err(err) = repo.source.get_authorization_secret() {
-            return Result::Err(format!("cannot parse authorization: {}", err.to_string()));
+            return Err(format!("cannot parse authorization: {}", err));
         }
 
-        let result = repo.source.parse_public_key();
-        if result.is_err() {
-            return Result::Err(result.err().unwrap().to_string());
-        }
-        if let Some(public_key) = result.unwrap() {
-            let result = public_key.verify();
-            if result.is_err() {
-                return Result::Err(format!(
-                    "cannot verify public key: {}",
-                    result.err().unwrap().to_string()
-                ));
-            }
+        if let Some(public_key) = repo.source.parse_public_key().map_err(|e| e.to_string())? {
+            public_key
+                .verify()
+                .map_err(|e| format!("cannot verify public key: {}", e))?;
         }
 
         if repo.destination.s3.is_some() && repo.destination.local.is_some() {
-            return Result::Err(format!("cannot have both s3 and local destination"));
+            return Err("cannot have both s3 and local destination".to_string());
         }
 
         if repo.destination.s3.is_none() && repo.destination.local.is_none() {
-            return Result::Err(format!(
-                "you must define at least one destination, either local or s3"
-            ));
+            return Err("you must define at least one destination, either local or s3".to_string());
         }
 
-        if repo.destination.s3.is_some() {
-            if let Err(err) = repo.destination.s3.clone().unwrap().get_aws_credentials() {
-                return Err(format!("cannot read aws credential: {}", err.to_string()));
+        if let Some(s3) = &repo.destination.s3 {
+            if let Err(err) = s3.get_aws_credentials() {
+                return Err(format!("cannot read aws credential: {}", err));
             }
         }
 
-        if repo.destination.local.is_some() {
-            if !repo
-                .destination
-                .local
-                .clone()
-                .unwrap()
-                .path
-                .starts_with("/")
-            {
-                return Err(format!("local destination path must be absolute"));
+        if let Some(local) = &repo.destination.local {
+            if !local.path.starts_with('/') {
+                return Err("local destination path must be absolute".to_string());
             }
         }
     }
 
-    Result::Ok(config)
+    Ok(config)
 }
 
 fn remove_initial_slash(s: &str) -> String {
-    if s.starts_with("/") {
-        let len = s.len();
-        s[1..len].into()
-    } else {
-        s.into()
-    }
+    s.strip_prefix('/')
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| s.to_string())
 }
+
 fn remove_trailing_slash(s: &str) -> String {
-    if s.ends_with("/") {
-        let len = s.len();
-        s[0..len - 1].into()
-    } else {
-        s.into()
-    }
+    s.strip_suffix('/')
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| s.to_string())
 }
 
 #[cfg(test)]

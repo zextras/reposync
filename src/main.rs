@@ -34,7 +34,7 @@ fn main() {
     };
 
     let matches = App::new("RepoSync")
-        .version("0.10.0")
+        .version(env!("CARGO_PKG_VERSION"))
         .about("Keep a repository synchronized to an S3 bucket")
         .args(&[
             Arg::with_name("config")
@@ -65,16 +65,17 @@ fn main() {
         ])
         .get_matches();
 
-    let config_file = matches.value_of("config").unwrap();
-
-    let result = config::load_config(config_file);
-    if result.is_err() {
-        eprintln!("{}", result.err().unwrap());
+    let config_file = matches
+        .value_of("config")
+        .expect("config argument is required");
+    let config = config::load_config(config_file).unwrap_or_else(|e| {
+        eprintln!("{}", e);
         exit(1);
-    }
-    let config = result.unwrap();
+    });
 
-    let action = matches.value_of("action").unwrap();
+    let action = matches
+        .value_of("action")
+        .expect("action argument is required");
     let dry_run = matches.is_present("dry-run");
     match action {
         "check" => {
@@ -108,10 +109,8 @@ fn main() {
             }
         }
         "server" => {
-            start_server(
-                &config.general.bind_address.clone(),
-                SyncManager::new(config, false),
-            );
+            let addr = config.general.bind_address.clone();
+            start_server(&addr, SyncManager::new(config, false));
         }
         _ => {
             panic!("unknown action {}", action);
