@@ -23,7 +23,7 @@ use clap::{App, Arg};
 use std::process::exit;
 
 fn main() {
-    env_logger::init();
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
     let action_validator = |x: String| -> Result<(), String> {
         if ["check", "sync", "server"].contains(&x.as_str()) {
