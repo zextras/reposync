@@ -61,7 +61,7 @@ Uses a multi-stage Alpine build (`deployment/Dockerfile`). The final image conta
 ## Usage
 
 ```
-RepoSync 0.10.0
+RepoSync 0.11.0
 Keep a repository synchronized to an S3 bucket
 
 USAGE:

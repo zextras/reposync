@@ -80,11 +80,7 @@ impl Lock {
     pub fn is_repo_syncing(&self, repo_name: &str) -> bool {
         let map = self.sync_locks.lock().unwrap();
         if let Some(atomic) = map.get(repo_name) {
-            if atomic.load(Ordering::SeqCst) {
-                true
-            } else {
-                false
-            }
+            atomic.load(Ordering::SeqCst)
         } else {
             true
         }

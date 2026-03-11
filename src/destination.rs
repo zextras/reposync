@@ -19,9 +19,7 @@ pub fn create_destination(
     general: &GeneralConfig,
     destination: &DestinationConfig,
 ) -> Result<Box<dyn Destination>, std::io::Error> {
-    if destination.s3.is_some() {
-        let s3 = destination.s3.clone().unwrap();
-
+    if let Some(s3) = &destination.s3 {
         let (access_key, access_key_secret) = s3
             .get_aws_credentials()
             .expect("cannot read aws cred, should be already validated");
@@ -39,9 +37,11 @@ pub fn create_destination(
             Duration::from_secs(general.retry_sleep),
         )))
     } else {
-        Ok(Box::new(LocalDestination::new(
-            &destination.local.clone().unwrap().path,
-        )?))
+        let local = destination
+            .local
+            .as_ref()
+            .expect("destination must be s3 or local");
+        Ok(Box::new(LocalDestination::new(&local.path)?))
     }
 }
 
@@ -286,7 +286,7 @@ impl Destination for S3Destination {
             let result = block_on(
                 client
                     .create_invalidation()
-                    .distribution_id(self.cloudfront_arn.clone().unwrap())
+                    .distribution_id(self.cloudfront_arn.as_deref().unwrap())
                     .invalidation_batch(batch)
                     .send(),
             );

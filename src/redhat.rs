@@ -82,14 +82,8 @@ where
     }
 
     let (disk_path, mut reader, size) = result.unwrap();
-    let result = parse_repomod(&mut reader);
-    if result.is_err() {
-        let err = result.err().unwrap();
-        return Result::Err(std::io::Error::new(
-            err.kind(),
-            format!("cannot parse repomod.xml: {}", err.to_string()),
-        ));
-    }
+    let repomod_entries = parse_repomod(&mut reader)
+        .map_err(|e| std::io::Error::new(e.kind(), format!("cannot parse repomod.xml: {}", e)))?;
 
     let signature = add_optional_index(
         state,
@@ -98,30 +92,25 @@ where
         Signature::None,
     )?;
 
-    let mut reader = state.read(&repo_mod_path)?.unwrap();
-    if signature.is_some() {
+    let mut reader = state.read(repo_mod_path)?.unwrap();
+    let sig_variant = if let Some(mut sig_reader) = signature {
         let mut text_signature = String::new();
-        signature.unwrap().read_to_string(&mut text_signature)?;
-        collection.indexes.push(IndexFile {
-            file_path: disk_path,
-            path: repo_mod_path.into(),
-            size,
-            hash: Hash::create_sha256_hash(&mut reader)?,
-            signature: Signature::PGPExternal {
-                signature: text_signature,
-            },
-        });
+        sig_reader.read_to_string(&mut text_signature)?;
+        Signature::PGPExternal {
+            signature: text_signature,
+        }
     } else {
-        collection.indexes.push(IndexFile {
-            file_path: disk_path,
-            path: repo_mod_path.into(),
-            size,
-            hash: Hash::create_sha256_hash(&mut reader)?,
-            signature: Signature::None,
-        });
-    }
+        Signature::None
+    };
+    collection.indexes.push(IndexFile {
+        file_path: disk_path,
+        path: repo_mod_path.into(),
+        size,
+        hash: Hash::create_sha256_hash(&mut reader)?,
+        signature: sig_variant,
+    });
 
-    for data in result.unwrap() {
+    for data in repomod_entries {
         let (disk_path, mut reader, size) = state.fetch(&data.location).unwrap();
 
         if data.type_ == "primary" {
