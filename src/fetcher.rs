@@ -33,11 +33,8 @@ struct RetryFetcher {
 impl Fetcher for RetryFetcher {
     fn fetch(&self, url: &str) -> Result<Box<dyn Read>, FetchError> {
         let mut last_err = None;
-        let result = crate::retry::retry_with_backoff(
-            self.max_retries,
-            self.retry_sleep,
-            "fetch",
-            || {
+        let result =
+            crate::retry::retry_with_backoff(self.max_retries, self.retry_sleep, "fetch", || {
                 let res = self.fetcher.fetch(url);
                 match res {
                     Ok(val) => Ok(Ok(val)),
@@ -50,8 +47,7 @@ impl Fetcher for RetryFetcher {
                         }
                     }
                 }
-            },
-        );
+            });
 
         match result {
             Ok(Ok(val)) => Ok(val),

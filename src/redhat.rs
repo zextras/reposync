@@ -26,6 +26,18 @@ pub fn load_repository(
     Ok((result.unwrap(), repo_metadata))
 }
 
+/// Load the current repository state from an arbitrary `RepoMetadataStore`.
+/// Used when the store is S3 (so we read the last-synced indexes straight from
+/// the destination bucket instead of from a local disk copy).
+pub fn load_repository_with_store(
+    store: &dyn RepoMetadataStore,
+    config: &RepositoryConfig,
+) -> Result<Repository, std::io::Error> {
+    fetch_repository_internal(store, config).map_err(|e| {
+        std::io::Error::new(e.kind(), format!("cannot load current repo state: {}", e))
+    })
+}
+
 pub fn fetch_repository(
     fetcher: Rc<dyn Fetcher>,
     tmp_path: &str,
@@ -48,7 +60,7 @@ fn fetch_repository_internal<T>(
     config: &RepositoryConfig,
 ) -> Result<Repository, std::io::Error>
 where
-    T: RepoMetadataStore,
+    T: RepoMetadataStore + ?Sized,
 {
     let mut collection = Collection {
         target: Target {

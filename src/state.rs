@@ -1,14 +1,19 @@
+use crate::config::S3Destination;
 use crate::fetcher::Fetcher;
 use data_encoding::BASE32_NOPAD;
 use std::fs;
 use std::fs::File;
-use std::io::{Error, ErrorKind, Read};
+use std::io::{Error, ErrorKind, Read, Write};
 use std::rc::Rc;
 
 pub trait RepoMetadataStore {
     fn fetch(&self, path: &str) -> Result<(String, Box<dyn Read>, u64), std::io::Error>;
     fn read(&self, path: &str) -> Result<Option<Box<dyn Read>>, std::io::Error>;
 }
+
+// ---------------------------------------------------------------------------
+// SavedRepoMetadataStore — reads from local disk (used for local destinations)
+// ---------------------------------------------------------------------------
 
 pub struct SavedRepoMetadataStore {
     directory: String,
@@ -36,6 +41,10 @@ impl RepoMetadataStore for SavedRepoMetadataStore {
         Ok(Some(reader))
     }
 }
+
+// ---------------------------------------------------------------------------
+// LiveRepoMetadataStore — fetches from a remote URL into a tmp directory
+// ---------------------------------------------------------------------------
 
 pub struct LiveRepoMetadataStore {
     repo_base_url: String,
@@ -125,6 +134,131 @@ impl RepoMetadataStore for LiveRepoMetadataStore {
     }
 }
 
+// ---------------------------------------------------------------------------
+// S3RepoMetadataStore — reads current state directly from the S3 destination.
+//
+// This eliminates the need for a local `data_path` persistence directory: the
+// S3 bucket already holds the last-uploaded indexes, so we download those tiny
+// metadata files at the start of each sync cycle to rebuild the "current" state
+// and compute the diff.  First-run (empty bucket) returns NotFound which the
+// callers already handle gracefully (full sync from scratch).
+// ---------------------------------------------------------------------------
+
+pub struct S3RepoMetadataStore {
+    s3_client: aws_sdk_s3::Client,
+    bucket: String,
+    /// S3 key prefix, e.g. "my-repo" (no leading/trailing slash)
+    s3_prefix: String,
+    tmp_directory: String,
+}
+
+impl S3RepoMetadataStore {
+    pub fn new(s3: &S3Destination, tmp_directory: &str) -> Self {
+        let (access_key_id, access_key_secret) = s3
+            .get_aws_credentials()
+            .expect("cannot read aws credentials for S3RepoMetadataStore");
+
+        let creds = aws_sdk_s3::config::Credentials::new(
+            &access_key_id,
+            &access_key_secret,
+            None,
+            None,
+            "reposync-static",
+        );
+        let config = aws_sdk_s3::config::Builder::new()
+            .behavior_version(aws_sdk_s3::config::BehaviorVersion::latest())
+            .credentials_provider(creds)
+            .region(aws_sdk_s3::config::Region::new(s3.region_name.clone()))
+            .endpoint_url(&s3.s3_endpoint)
+            .force_path_style(true)
+            .build();
+
+        S3RepoMetadataStore {
+            s3_client: aws_sdk_s3::Client::from_conf(config),
+            bucket: s3.s3_bucket.clone(),
+            s3_prefix: s3.path.clone(),
+            tmp_directory: tmp_directory.into(),
+        }
+    }
+
+    fn s3_key(&self, path: &str) -> String {
+        if self.s3_prefix.is_empty() {
+            path.into()
+        } else {
+            format!("{}/{}", self.s3_prefix, path)
+        }
+    }
+}
+
+fn block_on<F: std::future::Future>(future: F) -> F::Output {
+    match tokio::runtime::Handle::try_current() {
+        Ok(h) => h.block_on(future),
+        Err(_) => tokio::runtime::Runtime::new()
+            .expect("failed to create tokio runtime")
+            .block_on(future),
+    }
+}
+
+impl RepoMetadataStore for S3RepoMetadataStore {
+    fn fetch(&self, path: &str) -> Result<(String, Box<dyn Read>, u64), Error> {
+        let key = self.s3_key(path);
+
+        let result = block_on(
+            self.s3_client
+                .get_object()
+                .bucket(&self.bucket)
+                .key(&key)
+                .send(),
+        );
+
+        match result {
+            Ok(output) => {
+                std::fs::create_dir_all(&self.tmp_directory)?;
+
+                let base32 = BASE32_NOPAD.encode(path.as_bytes());
+                let file_path = format!("{}/{}", self.tmp_directory, base32);
+
+                let bytes = block_on(output.body.collect()).map_err(|e| {
+                    Error::new(ErrorKind::Other, format!("S3 read body error: {}", e))
+                })?;
+                let content = bytes.into_bytes();
+                let size = content.len() as u64;
+
+                let mut file = File::create(&file_path)?;
+                file.write_all(&content)?;
+                drop(file);
+
+                Ok((file_path.clone(), Box::new(File::open(&file_path)?), size))
+            }
+            Err(e) => {
+                let is_404 = matches!(
+                    &e,
+                    aws_sdk_s3::error::SdkError::ServiceError(se)
+                        if se.raw().status().as_u16() == 404
+                );
+                if is_404 {
+                    Err(Error::new(
+                        ErrorKind::NotFound,
+                        format!("not found in S3: {}", path),
+                    ))
+                } else {
+                    Err(Error::new(
+                        ErrorKind::Other,
+                        format!("S3 fetch error for '{}': {}", path, e),
+                    ))
+                }
+            }
+        }
+    }
+
+    fn read(&self, path: &str) -> Result<Option<Box<dyn Read>>, Error> {
+        match self.fetch(path) {
+            Ok((_, reader, _)) => Ok(Some(reader)),
+            Err(e) if e.kind() == ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -135,7 +269,10 @@ mod tests {
     struct NoOpFetcher;
     impl Fetcher for NoOpFetcher {
         fn fetch(&self, _url: &str) -> Result<Box<dyn std::io::Read>, crate::fetcher::FetchError> {
-            Err(crate::fetcher::FetchError { code: 404, error: "not found".into() })
+            Err(crate::fetcher::FetchError {
+                code: 404,
+                error: "not found".into(),
+            })
         }
     }
 

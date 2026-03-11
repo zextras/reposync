@@ -3,7 +3,7 @@ use crate::destination::{create_destination, Destination};
 use crate::fetcher::Fetcher;
 use crate::locks::Lock;
 use crate::packages::{Collection, Hash, IndexFile, Package, Repository};
-use crate::state::SavedRepoMetadataStore;
+use crate::state::S3RepoMetadataStore;
 use crate::{debian, fetcher, redhat};
 use core::fmt;
 #[cfg(test)]
@@ -98,7 +98,12 @@ impl SyncManager {
         Self::new_internal(config, Lock::new(), Arc::new(RealTimeProvider {}), dry_run)
     }
 
-    fn new_internal(config: Config, lock: Lock, time_provider: Arc<dyn TimeProvider>, dry_run: bool) -> Self {
+    fn new_internal(
+        config: Config,
+        lock: Lock,
+        time_provider: Arc<dyn TimeProvider>,
+        dry_run: bool,
+    ) -> Self {
         let mut map = BTreeMap::new();
         config.repo.iter().for_each(|r| {
             map.insert(
@@ -146,8 +151,11 @@ impl SyncManager {
     }
 
     ///returns true if all paths in the configuration are accessible
+    ///returns true if all paths in the configuration are accessible
     pub fn check_permissions(&self) -> Result<(), std::io::Error> {
-        Self::check_writable(&self.config.general.data_path)?;
+        if let Some(data_path) = &self.config.general.data_path {
+            Self::check_writable(data_path)?;
+        }
         Self::check_writable(&self.config.general.tmp_path)?;
         Ok(())
     }
@@ -238,15 +246,10 @@ impl SyncManager {
     pub fn load_current_by_name(
         &self,
         repo_name: &str,
-    ) -> Result<Option<(Repository, SavedRepoMetadataStore)>, std::io::Error> {
+    ) -> Result<Option<Repository>, std::io::Error> {
         let repo_config = self.get_repo_config(repo_name);
         if let Some(repo_config) = repo_config {
-            let result = self.load_current(repo_config);
-            if let Ok(result) = result {
-                Ok(Some(result))
-            } else {
-                Err(result.err().unwrap())
-            }
+            Ok(Some(self.load_current(repo_config)?))
         } else {
             Ok(None)
         }
@@ -256,35 +259,53 @@ impl SyncManager {
         self.config.repo.iter().find(|x| x.name == repo_name)
     }
 
+    /// Load the last-known repository state for diffing.
+    ///
+    /// For S3 destinations the state is read directly from the bucket (the
+    /// indexes uploaded at the end of the previous sync are the source of
+    /// truth).  No local `data_path` directory is needed.
+    ///
+    /// For local destinations the state is read from the on-disk copy kept in
+    /// `data_path/{repo_name}/`.
     pub fn load_current(
         &self,
         repo_config: &RepositoryConfig,
-    ) -> Result<(Repository, SavedRepoMetadataStore), std::io::Error> {
-        let _write_lock = self.lock.lock_write(&repo_config.name);
-        let data_path = format!("{}/{}", self.config.general.data_path, repo_config.name);
+    ) -> Result<Repository, std::io::Error> {
+        // --- S3 destination: read state back from the bucket ---
+        if let Some(s3) = &repo_config.destination.s3 {
+            let tmp_dir = format!(
+                "{}/s3state_tmp_{}",
+                self.config.general.tmp_path, repo_config.name
+            );
+            let store = S3RepoMetadataStore::new(s3, &tmp_dir);
 
-        let result = File::open(&data_path);
-        if result.is_err() {
-            return Ok((
-                Repository {
-                    name: repo_config.name.clone(),
-                    collections: vec![],
-                },
-                SavedRepoMetadataStore::new(&data_path),
-            ));
+            return match repo_config.source.kind.as_str() {
+                "debian" => debian::load_repository_with_store(&store, repo_config),
+                "redhat" => redhat::load_repository_with_store(&store, repo_config),
+                _ => panic!("unknown repo of type {}", &repo_config.source.kind),
+            };
+        }
+
+        // --- Local destination: read from on-disk state directory ---
+        let _write_lock = self.lock.lock_write(&repo_config.name);
+        let data_path_base = self
+            .config
+            .general
+            .data_path
+            .as_deref()
+            .expect("data_path is required for local destinations");
+        let data_path = format!("{}/{}", data_path_base, repo_config.name);
+
+        if File::open(&data_path).is_err() {
+            return Ok(Repository {
+                name: repo_config.name.clone(),
+                collections: vec![],
+            });
         }
 
         match repo_config.source.kind.as_str() {
-            "debian" => {
-                let (repo, store) = debian::load_repository(&data_path, &repo_config)?;
-                Ok((repo, store))
-            }
-
-            "redhat" => {
-                let (repo, store) = redhat::load_repository(&data_path, &repo_config)?;
-                Ok((repo, store))
-            }
-
+            "debian" => debian::load_repository(&data_path, repo_config).map(|(r, _)| r),
+            "redhat" => redhat::load_repository(&data_path, repo_config).map(|(r, _)| r),
             _ => panic!("unknown repo of type {}", &repo_config.source.kind),
         }
     }
@@ -330,25 +351,13 @@ impl SyncManager {
     ) -> Result<(), std::io::Error> {
         let fetcher: Rc<dyn Fetcher> = Rc::from(fetcher);
 
+        let fetch_tmp = format!(
+            "{}/tmp_{}/",
+            &self.config.general.tmp_path, &repo_config.name
+        );
         let (repo, metadata_store) = match repo_config.source.kind.as_str() {
-            "debian" => debian::fetch_repository(
-                fetcher.clone(),
-                &format!(
-                    "{}/tmp_{}/",
-                    &self.config.general.data_path, &repo_config.name
-                ),
-                &repo_config,
-            )?,
-
-            "redhat" => redhat::fetch_repository(
-                fetcher.clone(),
-                &format!(
-                    "{}/tmp_{}/",
-                    &self.config.general.data_path, repo_config.name
-                ),
-                &repo_config,
-            )?,
-
+            "debian" => debian::fetch_repository(fetcher.clone(), &fetch_tmp, repo_config)?,
+            "redhat" => redhat::fetch_repository(fetcher.clone(), &fetch_tmp, repo_config)?,
             _ => panic!("unknown repo of type {}", &repo_config.source.kind),
         };
 
@@ -373,13 +382,15 @@ impl SyncManager {
             log::warn!("no public pgp key provided, skipping metadata signature validation")
         }
 
-        let (current_repo, _) = self.load_current(repo_config)?;
+        let current_repo = self.load_current(repo_config)?;
 
         let (packages_copy_list, packages_delete_list, index_copy_list, index_delete_list) =
             SyncManager::repo_diff(&repo, current_repo);
 
-        if packages_copy_list.is_empty() && index_copy_list.is_empty()
-            && packages_delete_list.is_empty() && index_delete_list.is_empty()
+        if packages_copy_list.is_empty()
+            && index_copy_list.is_empty()
+            && packages_delete_list.is_empty()
+            && index_delete_list.is_empty()
         {
             return Ok(());
         }
@@ -391,16 +402,19 @@ impl SyncManager {
             (packages_copy_list.iter().fold(0, |a, p| a + p.size)
                 + index_copy_list.iter().fold(0, |a, p| a + p.size)) as f64
                 / (1024f64 * 1024f64)
-);
+        );
 
         log::info!(
             "{} packages and {} indexes to delete.",
             packages_delete_list.len(),
             index_delete_list.len()
-);
+        );
 
         if self.dry_run {
-            log::info!("[dry-run] would copy {} packages:", packages_copy_list.len());
+            log::info!(
+                "[dry-run] would copy {} packages:",
+                packages_copy_list.len()
+            );
             for op in &packages_copy_list {
                 let action = if op.is_replace { "replace" } else { "copy" };
                 log::info!("  {} {} ({} bytes)", action, op.path, op.size);
@@ -410,11 +424,17 @@ impl SyncManager {
                 let action = if op.is_replace { "replace" } else { "copy" };
                 log::info!("  {} {} ({} bytes)", action, op.path, op.size);
             }
-            log::info!("[dry-run] would delete {} packages:", packages_delete_list.len());
+            log::info!(
+                "[dry-run] would delete {} packages:",
+                packages_delete_list.len()
+            );
             for op in &packages_delete_list {
                 log::info!("  delete {}", op.path);
             }
-            log::info!("[dry-run] would delete {} indexes:", index_delete_list.len());
+            log::info!(
+                "[dry-run] would delete {} indexes:",
+                index_delete_list.len()
+            );
             for op in &index_delete_list {
                 log::info!("  delete {}", op.path);
             }
@@ -451,11 +471,18 @@ impl SyncManager {
             destination.delete(&operation.path)?;
         }
 
-        let _write_lock = self.lock.lock_write(&repo_config.name);
-        metadata_store.replace(&format!(
-            "{}/{}",
-            self.config.general.data_path, repo_config.name
-        ))?;
+        // For S3 destinations state is implicit in the bucket — the new indexes
+        // were already uploaded above, so nothing extra to persist locally.
+        if repo_config.destination.s3.is_none() {
+            let _write_lock = self.lock.lock_write(&repo_config.name);
+            let data_path_base = self
+                .config
+                .general
+                .data_path
+                .as_deref()
+                .expect("data_path is required for local destinations");
+            metadata_store.replace(&format!("{}/{}", data_path_base, repo_config.name))?;
+        }
 
         Ok(())
     }
@@ -748,7 +775,7 @@ pub mod tests {
     fn create_config(tmp_dir: &TempDir) -> Config {
         let config = Config {
             general: GeneralConfig {
-                data_path: format!("{}/data", tmp_dir.path().to_str().unwrap()),
+                data_path: Some(format!("{}/data", tmp_dir.path().to_str().unwrap())),
                 tmp_path: format!("{}/tmp", tmp_dir.path().to_str().unwrap()),
                 bind_address: "".to_string(),
                 timeout: 0,
@@ -775,7 +802,7 @@ pub mod tests {
             }],
         };
 
-        std::fs::create_dir_all(&config.general.data_path).unwrap();
+        std::fs::create_dir_all(config.general.data_path.as_deref().unwrap()).unwrap();
         std::fs::create_dir_all(&config.general.tmp_path).unwrap();
 
         config
@@ -793,7 +820,7 @@ pub mod tests {
             sync_map: Arc::new(Mutex::new(Default::default())),
             dry_run: false,
         };
-        let (repository, _saved_metadata_store) = sync_manager
+        let repository = sync_manager
             .load_current(&config.repo.get(0).unwrap())
             .unwrap();
 
@@ -989,7 +1016,8 @@ pub mod tests {
             });
         }
 
-        let sync_manager = SyncManager::new_internal(config.clone(), Lock::new(), Arc::new(mock), false);
+        let sync_manager =
+            SyncManager::new_internal(config.clone(), Lock::new(), Arc::new(mock), false);
 
         secs_offset.store(0, Ordering::SeqCst);
         {
