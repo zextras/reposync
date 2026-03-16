@@ -19,75 +19,64 @@ mod state;
 mod sync;
 mod utils;
 use crate::sync::SyncManager;
-use clap::{App, Arg};
+use clap::{Arg, Command};
 use std::process::exit;
 
 fn main() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
-    let action_validator = |x: String| -> Result<(), String> {
-        if ["check", "sync", "server"].contains(&x.as_str()) {
-            Ok(())
-        } else {
-            Err("only check, sync, server are valid actions".into())
-        }
-    };
-
-    let matches = App::new("RepoSync")
+    let matches = Command::new("RepoSync")
         .version(env!("CARGO_PKG_VERSION"))
         .about("Keep a repository synchronized to an S3 bucket")
         .args(&[
-            Arg::with_name("config")
+            Arg::new("config")
                 .long("config")
                 .value_name("CONFIG_FILE")
                 .help("location of config file")
-                .takes_value(true)
                 .required(true)
                 .index(1),
-            Arg::with_name("action")
+            Arg::new("action")
                 .long("action")
                 .value_name("ACTION")
                 .help("action to perform, 'check', 'sync' or 'server'")
-                .takes_value(true)
                 .required(true)
-                .validator(action_validator)
+                .value_parser(["check", "sync", "server"])
                 .index(2),
-            Arg::with_name("repository")
+            Arg::new("repository")
                 .long("repo")
                 .value_name("REPO")
                 .help("which repo to synchronize, check, sync, or server")
-                .takes_value(true)
                 .required(false),
-            Arg::with_name("dry-run")
+            Arg::new("dry-run")
                 .long("dry-run")
                 .help("show what would be done without making any changes")
-                .takes_value(false),
+                .action(clap::ArgAction::SetTrue),
         ])
         .get_matches();
 
-    let config_file = matches
-        .value_of("config")
+    let config_file: &String = matches
+        .get_one("config")
         .expect("config argument is required");
     let config = config::load_config(config_file).unwrap_or_else(|e| {
         eprintln!("{}", e);
         exit(1);
     });
 
-    let action = matches
-        .value_of("action")
+    let action: &String = matches
+        .get_one("action")
         .expect("action argument is required");
-    let dry_run = matches.is_present("dry-run");
-    match action {
+    let dry_run = matches.get_flag("dry-run");
+    match action.as_str() {
         "check" => {
             log::info!("config file is correct");
             exit(0);
         }
         "sync" => {
-            if let Some(repo_name) = matches.value_of("repository") {
+            if let Some(repo_name) = matches.get_one::<String>("repository") {
                 let repo_names: Vec<String> = if repo_name == "all" {
                     config.repo.iter().map(|r| r.name.clone()).collect()
                 } else {
-                    vec![repo_name.into()]
+                    vec![repo_name.clone()]
                 };
                 let sync_manager = SyncManager::new(config, dry_run);
                 for repo_name in repo_names {

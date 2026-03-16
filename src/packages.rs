@@ -1,5 +1,5 @@
 use data_encoding::HEXLOWER_PERMISSIVE;
-use pgp::{Deserializable, SignedPublicKey, StandaloneSignature};
+use pgp::composed::{Deserializable, DetachedSignature, SignedPublicKey};
 use sha1::digest::{FixedOutput, Update};
 use sha1::{Digest, Sha1};
 use sha2::Sha256;
@@ -153,7 +153,7 @@ impl Signature {
         signature: &String,
         data: &[u8],
     ) -> Result<(), Error> {
-        let result = StandaloneSignature::from_armor_single(Cursor::new(signature.as_bytes()));
+        let result = DetachedSignature::from_armor_single(Cursor::new(signature.as_bytes()));
 
         if let Ok((signature, _)) = result {
             let result = signature.verify(&public_key, data);

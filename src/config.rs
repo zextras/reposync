@@ -1,4 +1,4 @@
-use pgp::{Deserializable, SignedPublicKey};
+use pgp::composed::{Deserializable, SignedPublicKey};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::fs::File;
@@ -34,7 +34,7 @@ impl SourceConfig {
             let (public_key, _) = SignedPublicKey::from_string(key_str).map_err(|err| {
                 std::io::Error::new(
                     ErrorKind::InvalidData,
-                    format!("cannot parse public key: {}", err.as_code()),
+                    format!("cannot parse public key: {}", err),
                 )
             })?;
             Ok(Some(public_key))
@@ -184,7 +184,7 @@ pub fn load_config(path: &str) -> Result<Config, String> {
 
         if let Some(public_key) = repo.source.parse_public_key().map_err(|e| e.to_string())? {
             public_key
-                .verify()
+                .verify_bindings()
                 .map_err(|e| format!("cannot verify public key: {}", e))?;
         }
 
