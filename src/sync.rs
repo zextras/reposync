@@ -278,10 +278,20 @@ impl SyncManager {
             );
             let store = S3RepoMetadataStore::new(s3, &tmp_dir);
 
-            return match repo_config.source.kind.as_str() {
+            let result = match repo_config.source.kind.as_str() {
                 "debian" => debian::load_repository_with_store(&store, repo_config),
                 "redhat" => redhat::load_repository_with_store(&store, repo_config),
                 _ => panic!("unknown repo of type {}", &repo_config.source.kind),
+            };
+
+            // Empty bucket (first sync) — return an empty repo so a full
+            // sync from scratch is performed, just like the local path case.
+            return match result {
+                Err(e) if e.kind() == ErrorKind::NotFound => Ok(Repository {
+                    name: repo_config.name.clone(),
+                    collections: vec![],
+                }),
+                other => other,
             };
         }
 
