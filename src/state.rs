@@ -1,10 +1,13 @@
 use crate::config::S3Destination;
 use crate::fetcher::Fetcher;
+use aws_smithy_types::byte_stream::ByteStream;
 use data_encoding::BASE32_NOPAD;
+use log::warn;
 use std::fs;
 use std::fs::File;
 use std::io::{Error, ErrorKind, Read, Write};
 use std::rc::Rc;
+use std::time::Duration;
 
 pub trait RepoMetadataStore {
     fn fetch(&self, path: &str) -> Result<(String, Box<dyn Read>, u64), std::io::Error>;
@@ -150,6 +153,10 @@ pub struct S3RepoMetadataStore {
     /// S3 key prefix, e.g. "my-repo" (no leading/trailing slash)
     s3_prefix: String,
     tmp_directory: String,
+    /// Dedicated runtime so the S3 client's connection pool and body
+    /// streaming always run on the same executor, avoiding deadlocks
+    /// when the caller is already inside another tokio runtime.
+    runtime: tokio::runtime::Runtime,
 }
 
 impl S3RepoMetadataStore {
@@ -165,12 +172,16 @@ impl S3RepoMetadataStore {
             None,
             "reposync-static",
         );
+        let timeout_config = aws_sdk_s3::config::timeout::TimeoutConfig::builder()
+            .read_timeout(Duration::from_secs(30))
+            .build();
         let config = aws_sdk_s3::config::Builder::new()
             .behavior_version(aws_sdk_s3::config::BehaviorVersion::latest())
             .credentials_provider(creds)
             .region(aws_sdk_s3::config::Region::new(s3.region_name.clone()))
             .endpoint_url(&s3.s3_endpoint)
             .force_path_style(true)
+            .timeout_config(timeout_config)
             .build();
 
         S3RepoMetadataStore {
@@ -178,6 +189,7 @@ impl S3RepoMetadataStore {
             bucket: s3.s3_bucket.clone(),
             s3_prefix: s3.path.clone(),
             tmp_directory: tmp_directory.into(),
+            runtime: tokio::runtime::Runtime::new().expect("failed to create tokio runtime for S3"),
         }
     }
 
@@ -190,65 +202,100 @@ impl S3RepoMetadataStore {
     }
 }
 
-fn block_on<F: std::future::Future>(future: F) -> F::Output {
-    match tokio::runtime::Handle::try_current() {
-        Ok(h) => h.block_on(future),
-        Err(_) => tokio::runtime::Runtime::new()
-            .expect("failed to create tokio runtime")
-            .block_on(future),
-    }
+/// Stream an S3 body to a local file chunk-by-chunk instead of buffering the
+/// entire body in memory.  This avoids "streaming error" failures on large
+/// objects (e.g. the Packages index) that can occur with `body.collect()`.
+fn stream_body_to_file(
+    rt: &tokio::runtime::Runtime,
+    body: ByteStream,
+    file_path: &str,
+) -> Result<u64, Error> {
+    let mut file = File::create(file_path)?;
+    let mut size: u64 = 0;
+
+    rt.block_on(async {
+        let mut body = body;
+        loop {
+            match body.try_next().await {
+                Ok(Some(chunk)) => {
+                    file.write_all(&chunk)?;
+                    size += chunk.len() as u64;
+                }
+                Ok(None) => break,
+                Err(e) => {
+                    return Err(Error::new(
+                        ErrorKind::Other,
+                        format!("streaming error after {} bytes: {:?}", size, e),
+                    ));
+                }
+            }
+        }
+        Ok::<(), Error>(())
+    })?;
+
+    Ok(size)
 }
 
 impl RepoMetadataStore for S3RepoMetadataStore {
     fn fetch(&self, path: &str) -> Result<(String, Box<dyn Read>, u64), Error> {
+        const MAX_RETRIES: u32 = 3;
         let key = self.s3_key(path);
 
-        let result = block_on(
-            self.s3_client
-                .get_object()
-                .bucket(&self.bucket)
-                .key(&key)
-                .send(),
-        );
+        std::fs::create_dir_all(&self.tmp_directory)?;
+        let base32 = BASE32_NOPAD.encode(path.as_bytes());
+        let file_path = format!("{}/{}", self.tmp_directory, base32);
 
-        match result {
-            Ok(output) => {
-                std::fs::create_dir_all(&self.tmp_directory)?;
+        let mut last_err = None;
 
-                let base32 = BASE32_NOPAD.encode(path.as_bytes());
-                let file_path = format!("{}/{}", self.tmp_directory, base32);
+        for attempt in 1..=MAX_RETRIES {
+            let result = self.runtime.block_on(
+                self.s3_client
+                    .get_object()
+                    .bucket(&self.bucket)
+                    .key(&key)
+                    .send(),
+            );
 
-                let bytes = block_on(output.body.collect()).map_err(|e| {
-                    Error::new(ErrorKind::Other, format!("S3 read body error: {}", e))
-                })?;
-                let content = bytes.into_bytes();
-                let size = content.len() as u64;
-
-                let mut file = File::create(&file_path)?;
-                file.write_all(&content)?;
-                drop(file);
-
-                Ok((file_path.clone(), Box::new(File::open(&file_path)?), size))
-            }
-            Err(e) => {
-                let is_404 = matches!(
-                    &e,
-                    aws_sdk_s3::error::SdkError::ServiceError(se)
-                        if se.raw().status().as_u16() == 404
-                );
-                if is_404 {
-                    Err(Error::new(
-                        ErrorKind::NotFound,
-                        format!("not found in S3: {}", path),
-                    ))
-                } else {
-                    Err(Error::new(
-                        ErrorKind::Other,
-                        format!("S3 fetch error for '{}': {}", path, e),
-                    ))
+            match result {
+                Ok(output) => match stream_body_to_file(&self.runtime, output.body, &file_path) {
+                    Ok(size) => {
+                        return Ok((file_path.clone(), Box::new(File::open(&file_path)?), size));
+                    }
+                    Err(e) => {
+                        let msg = format!("S3 read body error for '{}': {}", path, e);
+                        if attempt < MAX_RETRIES {
+                            warn!("attempt {}/{}: {}, retrying...", attempt, MAX_RETRIES, msg);
+                            std::thread::sleep(Duration::from_millis(500 * attempt as u64));
+                        }
+                        last_err = Some(Error::new(ErrorKind::Other, msg));
+                    }
+                },
+                Err(e) => {
+                    let is_404 = matches!(
+                        &e,
+                        aws_sdk_s3::error::SdkError::ServiceError(se)
+                            if se.raw().status().as_u16() == 404
+                    );
+                    if is_404 {
+                        return Err(Error::new(
+                            ErrorKind::NotFound,
+                            format!("not found in S3: {}", path),
+                        ));
+                    }
+                    let msg = format!("S3 fetch error for '{}': {}", path, e);
+                    if attempt < MAX_RETRIES {
+                        warn!(
+                            "attempt {}/{} for '{}': {}, retrying...",
+                            attempt, MAX_RETRIES, path, msg
+                        );
+                        std::thread::sleep(Duration::from_millis(500 * attempt as u64));
+                    }
+                    last_err = Some(Error::new(ErrorKind::Other, msg));
                 }
             }
         }
+
+        Err(last_err.unwrap())
     }
 
     fn read(&self, path: &str) -> Result<Option<Box<dyn Read>>, Error> {
