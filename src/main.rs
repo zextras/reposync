@@ -30,18 +30,27 @@ fn main() {
         .about("Keep a repository synchronized to an S3 bucket")
         .args(&[
             Arg::new("config")
+                .value_name("CONFIG_FILE")
+                .help("location of config file (positional)")
+                .required(false)
+                .index(1),
+            Arg::new("action")
+                .value_name("ACTION")
+                .help("action to perform, 'check', 'sync' or 'server' (positional)")
+                .required(false)
+                .value_parser(["check", "sync", "server"])
+                .index(2),
+            Arg::new("config-flag")
                 .long("config")
                 .value_name("CONFIG_FILE")
                 .help("location of config file")
-                .required(true)
-                .index(1),
-            Arg::new("action")
+                .required(false),
+            Arg::new("action-flag")
                 .long("action")
                 .value_name("ACTION")
                 .help("action to perform, 'check', 'sync' or 'server'")
-                .required(true)
-                .value_parser(["check", "sync", "server"])
-                .index(2),
+                .required(false)
+                .value_parser(["check", "sync", "server"]),
             Arg::new("repository")
                 .long("repo")
                 .value_name("REPO")
@@ -55,16 +64,26 @@ fn main() {
         .get_matches();
 
     let config_file: &String = matches
-        .get_one("config")
-        .expect("config argument is required");
+        .get_one::<String>("config-flag")
+        .or_else(|| matches.get_one::<String>("config"))
+        .unwrap_or_else(|| {
+            eprintln!("error: config file is required (provide as positional argument or --config <CONFIG_FILE>)");
+            exit(1);
+        });
     let config = config::load_config(config_file).unwrap_or_else(|e| {
         eprintln!("{}", e);
         exit(1);
     });
 
     let action: &String = matches
-        .get_one("action")
-        .expect("action argument is required");
+        .get_one::<String>("action-flag")
+        .or_else(|| matches.get_one::<String>("action"))
+        .unwrap_or_else(|| {
+            eprintln!(
+                "error: action is required (provide as positional argument or --action <ACTION>)"
+            );
+            exit(1);
+        });
     let dry_run = matches.get_flag("dry-run");
     match action.as_str() {
         "check" => {
