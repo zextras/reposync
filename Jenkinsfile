@@ -54,7 +54,7 @@ pipeline {
                     dockerStage(
                         imageName: 'reposync',
                         dockerfile: 'deployment/Dockerfile',
-                        registrySpace: 'infra'
+                        registrySpace: 'ci'
                     )
                 }
             }
