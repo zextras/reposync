@@ -1,0 +1,5 @@
+# Acknowledged findings — format: <commit>:<file>:<rule-id>:<line>
+#
+# False positive: example TLS server key shipped as fixture data under
+# generated/examples/, not a real secret.
+66ea3ee5f51a2c9c6e990b58a4222ded99577777:generated/examples/server-key.pem:private-key:1

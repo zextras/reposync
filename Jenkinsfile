@@ -1,5 +1,5 @@
 library(
-    identifier: 'jenkins-lib-common@1.3.3',
+    identifier: 'jenkins-lib-common@v4.9.1',
     retriever: modernSCM([
         $class: 'GitSCMSource',
         credentialsId: 'jenkins-integration-with-github-account',
@@ -17,6 +17,7 @@ pipeline {
     }
     options {
         buildDiscarder(logRotator(numToKeepStr: '20'))
+        disableConcurrentBuilds()
         timeout(time: 1, unit: 'HOURS')
         skipDefaultCheckout()
     }
@@ -24,8 +25,11 @@ pipeline {
         stage('Checkout') {
             steps {
                 checkout scm
-                script { gitMetadata() }
+                gitMetadata()
             }
+        }
+        stage('Security Scan') {
+            steps { gitleaksStage() }
         }
         stage('Build') {
             steps {
@@ -50,7 +54,7 @@ pipeline {
                     dockerStage(
                         imageName: 'reposync',
                         dockerfile: 'deployment/Dockerfile',
-                        registry: 'registry.dev.zextras.com/infra'
+                        registrySpace: 'ci'
                     )
                 }
             }
