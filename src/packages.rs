@@ -265,8 +265,34 @@ impl Repository {
 
 #[cfg(test)]
 pub mod tests {
-    use crate::packages::Signature;
+    use crate::packages::{Hash, Signature};
+    use std::io::Cursor;
 
+    /// Pins the digest values every checksum comparison depends on. Guards the
+    /// sha1/sha2 crates: a silent behaviour change there would make reposync
+    /// reject every upstream package, or worse, accept a corrupt one.
+    #[test]
+    fn hashes_match_known_digests() {
+        let sha1 = Hash::Sha1 {
+            hex: "a9993e364706816aba3e25717850c26c9cd0d89d".to_string(),
+        };
+        assert!(sha1.matches(&mut Cursor::new(b"abc".to_vec())).unwrap());
+        assert!(!sha1.matches(&mut Cursor::new(b"abd".to_vec())).unwrap());
+
+        let sha256 = Hash::Sha256 {
+            hex: "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad".to_string(),
+        };
+        assert!(sha256.matches(&mut Cursor::new(b"abc".to_vec())).unwrap());
+        assert!(!sha256.matches(&mut Cursor::new(b"abd".to_vec())).unwrap());
+
+        // The digest computed for freshly fetched indexes, not just compared.
+        assert_eq!(
+            Hash::Sha256 {
+                hex: "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad".to_string(),
+            },
+            Hash::create_sha256_hash(&mut Cursor::new(b"abc".to_vec())).unwrap()
+        );
+    }
     #[test]
     fn pgp_signature() {
         let text = "-----BEGIN PGP SIGNED MESSAGE-----
