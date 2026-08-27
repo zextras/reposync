@@ -3,6 +3,11 @@ name = "reposync"
 version = "0.12.1"
 authors = ["Davide Baldo <davide.baldo@zextras.com>"]
 edition = "2021"
+# Minimum supported Rust, matching the CI `rust-v1` agent. Enforced during
+# dependency resolution by resolver "3", so `cargo update` cannot select a
+# crate that needs a newer rustc than CI provides.
+rust-version = "1.93.1"
+resolver = "3"
 
 [profile.release]
 panic = "abort"
