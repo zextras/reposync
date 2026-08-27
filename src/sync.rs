@@ -91,11 +91,18 @@ pub struct SyncManager {
     time_provider: Arc<dyn TimeProvider>,
     sync_map: Arc<Mutex<BTreeMap<String, SyncStatus>>>,
     dry_run: bool,
+    force_invalidate: bool,
 }
 
 impl SyncManager {
-    pub fn new(config: Config, dry_run: bool) -> Self {
-        Self::new_internal(config, Lock::new(), Arc::new(RealTimeProvider {}), dry_run)
+    pub fn new(config: Config, dry_run: bool, force_invalidate: bool) -> Self {
+        Self::new_internal(
+            config,
+            Lock::new(),
+            Arc::new(RealTimeProvider {}),
+            dry_run,
+            force_invalidate,
+        )
     }
 
     fn new_internal(
@@ -103,6 +110,7 @@ impl SyncManager {
         lock: Lock,
         time_provider: Arc<dyn TimeProvider>,
         dry_run: bool,
+        force_invalidate: bool,
     ) -> Self {
         let mut map = BTreeMap::new();
         config.repo.iter().for_each(|r| {
@@ -124,6 +132,7 @@ impl SyncManager {
             time_provider,
             sync_map: Arc::new(Mutex::new(map)),
             dry_run,
+            force_invalidate,
         }
     }
 
@@ -391,11 +400,27 @@ impl SyncManager {
         let (packages_copy_list, packages_delete_list, index_copy_list, index_delete_list) =
             SyncManager::repo_diff(&repo, current_repo);
 
+        // The repository index directory, as a CloudFront wildcard. Every index
+        // object a sync can write or remove lives beneath it, so a single path
+        // covers all of them plus all their content-encoding cache variants.
+        // A trailing "*" matches recursively, so nested layouts (debian's
+        // dists/<codename>/<component>/binary-<arch>/) need no enumeration.
+        let index_wildcard = SyncManager::index_wildcard(repo_config);
+
         if packages_copy_list.is_empty()
             && index_copy_list.is_empty()
             && packages_delete_list.is_empty()
             && index_delete_list.is_empty()
         {
+            // Nothing changed at the origin. A previous run may still have
+            // failed to purge the CDN (or had nothing to purge because the
+            // prefix was brand new), leaving clients pinned to a stale index
+            // until the TTL expires. --force-invalidate re-issues the purge
+            // without needing a bucket change to hang it off.
+            if self.force_invalidate && !self.dry_run {
+                log::info!("nothing to synchronize, forcing cache invalidation");
+                destination.invalidate(vec![index_wildcard])?;
+            }
             return Ok(());
         }
 
@@ -448,24 +473,21 @@ impl SyncManager {
 
         log::info!("sync operation is atomic, either it's fully completed or will be performed from scratch");
 
-        let mut invalidation_paths: Vec<String> = Vec::new();
-        invalidation_paths.append(&mut SyncManager::copy(
+        SyncManager::copy(
             &self.config.general.tmp_path,
             &repo_config.source.endpoint,
             fetcher.borrow(),
             destination,
             packages_copy_list,
-        )?);
+        )?;
 
-        invalidation_paths.append(&mut SyncManager::copy(
+        SyncManager::copy(
             &self.config.general.tmp_path,
             &repo_config.source.endpoint,
             fetcher.borrow(),
             destination,
             index_copy_list,
-        )?);
-
-        destination.invalidate(invalidation_paths)?;
+        )?;
 
         for operation in packages_delete_list {
             destination.delete(&operation.path)?;
@@ -474,6 +496,12 @@ impl SyncManager {
         for operation in index_delete_list {
             destination.delete(&operation.path)?;
         }
+
+        // Invalidate last: a CloudFront invalidation only purges objects whose
+        // last write precedes its CreateTime, so it has to follow every upload
+        // AND every delete of this sync. Invalidating before the deletes left
+        // removed indexes served from cache until the TTL expired.
+        destination.invalidate(vec![index_wildcard])?;
 
         // For S3 destinations state is implicit in the bucket — the new indexes
         // were already uploaded above, so nothing extra to persist locally.
@@ -491,13 +519,28 @@ impl SyncManager {
         Ok(())
     }
 
+    /// CloudFront invalidation path for the repository index directory,
+    /// relative to the destination path (the destination prefixes it).
+    ///
+    /// One wildcard per repo replaces the previous per-file list. Besides being
+    /// correct for brand-new prefixes, it purges every content-encoding variant
+    /// of every index (CloudFront caches gzip and identity separately) and costs
+    /// a single billable invalidation path instead of one per changed file.
+    fn index_wildcard(repo_config: &RepositoryConfig) -> String {
+        match repo_config.source.kind.as_str() {
+            "debian" => "dists/*".to_string(),
+            "redhat" => "repodata/*".to_string(),
+            kind => panic!("unknown repo of type {}", kind),
+        }
+    }
+
     fn copy(
         tmp_path: &str,
         source_endpoint: &str,
         fetcher: &dyn Fetcher,
         destination: &mut dyn Destination,
         copy_list: Vec<CopyOperation>,
-    ) -> Result<Vec<String>, std::io::Error> {
+    ) -> Result<(), std::io::Error> {
         let result =
             SyncManager::copy_internal(tmp_path, source_endpoint, fetcher, destination, copy_list);
         if result.is_err() {
@@ -521,8 +564,7 @@ impl SyncManager {
         fetcher: &dyn Fetcher,
         destination: &mut dyn Destination,
         copy_list: Vec<CopyOperation>,
-    ) -> Result<Vec<String>, std::io::Error> {
-        let mut invalidation_paths: Vec<String> = Vec::new();
+    ) -> Result<(), std::io::Error> {
         std::fs::create_dir_all(tmp_path).expect("unable to create tmp_path");
 
         for operation in copy_list {
@@ -568,14 +610,11 @@ impl SyncManager {
             }
 
             tmp_file.seek(SeekFrom::Start(0))?;
-            if operation.is_replace {
-                invalidation_paths.push(operation.path.clone());
-            }
 
             destination.upload(&operation.path, tmp_file)?;
         }
 
-        Ok(invalidation_paths)
+        Ok(())
     }
 
     fn repo_diff(
@@ -812,6 +851,7 @@ pub mod tests {
             time_provider: Arc::new(RealTimeProvider {}),
             sync_map: Arc::new(Mutex::new(Default::default())),
             dry_run: false,
+            force_invalidate: false,
         };
         let repository = sync_manager
             .load_current(&config.repo.get(0).unwrap())
@@ -843,6 +883,7 @@ pub mod tests {
             sync_map: Arc::new(Mutex::new(Default::default())),
             time_provider: Arc::new(RealTimeProvider {}),
             dry_run: false,
+            force_invalidate: false,
         };
         sync_manager
             .sync_repo_internal(Box::new(mock_fetcher), &mut destination, repo_config)
@@ -925,7 +966,11 @@ pub mod tests {
         );
 
         assert_eq!(0, deletions.len());
-        assert_eq!(0, invalidations.len());
+        // A brand-new prefix must still be purged: the moving pointers that
+        // resolve onto it (/rc/..., /release-<range>/...) can have cached a
+        // partially-synced state of this very prefix while the sync ran.
+        assert_eq!(1, invalidations.len());
+        assert!(invalidations.contains("ubuntu/dists/*"));
 
         let mut mock_fetcher = MockFetcher::new();
         setup_fetcher(
@@ -944,16 +989,94 @@ pub mod tests {
         assert_eq!(8, contents.len());
         assert_eq!(1, deletions.len());
         assert!(deletions.contains("ubuntu/pool/service-discover-agent_0.1.0_amd64.deb"));
-        assert_eq!(8, invalidations.len());
-        assert!(invalidations.contains("ubuntu/dists/focal/Release"));
-        assert!(!invalidations.contains("ubuntu/dists/focal/Release.gpg"));
-        assert!(invalidations.contains("ubuntu/dists/focal/InRelease"));
-        assert!(invalidations.contains("ubuntu/dists/focal/main/binary-amd64/Packages"));
-        assert!(invalidations.contains("ubuntu/dists/focal/main/binary-amd64/Packages.gz"));
-        assert!(invalidations.contains("ubuntu/dists/focal/main/binary-amd64/Packages.bz2"));
-        assert!(invalidations.contains("ubuntu/dists/focal/main/binary-i386/Packages"));
-        assert!(invalidations.contains("ubuntu/dists/focal/main/binary-i386/Packages.gz"));
-        assert!(invalidations.contains("ubuntu/dists/focal/main/binary-i386/Packages.bz2"));
+        // One recursive wildcard replaces the previous per-file list: it covers
+        // the replaced indexes, the removed ones, and every content-encoding
+        // variant CloudFront caches for them.
+        assert_eq!(1, invalidations.len());
+        assert!(invalidations.contains("ubuntu/dists/*"));
+    }
+
+    #[test]
+    fn index_wildcard_matches_repo_kind() {
+        let tmp_dir = tempfile::tempdir().unwrap();
+        let config = create_config(&tmp_dir);
+
+        let debian = config.repo.get(0).unwrap();
+        assert_eq!("dists/*", SyncManager::index_wildcard(debian));
+
+        let mut redhat = debian.clone();
+        redhat.source.kind = "redhat".to_string();
+        assert_eq!("repodata/*", SyncManager::index_wildcard(&redhat));
+    }
+
+    #[test]
+    fn force_invalidate_purges_when_nothing_changed() {
+        let tmp_dir = tempfile::tempdir().unwrap();
+        let config = create_config(&tmp_dir);
+        let repo_config = config.repo.get(0).unwrap();
+
+        let mut mock_fetcher = MockFetcher::new();
+        setup_fetcher(
+            &mut mock_fetcher,
+            "samples/debian/Release",
+            "samples/debian/Packages",
+        );
+
+        let sync_manager = SyncManager {
+            config: config.clone(),
+            lock: Lock::new(),
+            sync_map: Arc::new(Mutex::new(Default::default())),
+            time_provider: Arc::new(RealTimeProvider {}),
+            dry_run: false,
+            force_invalidate: false,
+        };
+        let mut destination: MemoryDestination = MemoryDestination::new("ubuntu");
+        sync_manager
+            .sync_repo_internal(Box::new(mock_fetcher), &mut destination, repo_config)
+            .unwrap();
+
+        // Re-sync the identical source: the diff is empty, so without the flag
+        // the run is a no-op and cannot repair a missed invalidation.
+        let mut mock_fetcher = MockFetcher::new();
+        setup_fetcher(
+            &mut mock_fetcher,
+            "samples/debian/Release",
+            "samples/debian/Packages",
+        );
+        let mut destination: MemoryDestination = MemoryDestination::new("ubuntu");
+        sync_manager
+            .sync_repo_internal(Box::new(mock_fetcher), &mut destination, repo_config)
+            .unwrap();
+
+        let (contents, deletions, invalidations) = destination.explode();
+        assert_eq!(0, contents.len());
+        assert_eq!(0, deletions.len());
+        assert_eq!(0, invalidations.len());
+
+        let forcing = SyncManager {
+            config: config.clone(),
+            lock: Lock::new(),
+            sync_map: Arc::new(Mutex::new(Default::default())),
+            time_provider: Arc::new(RealTimeProvider {}),
+            dry_run: false,
+            force_invalidate: true,
+        };
+        let mut mock_fetcher = MockFetcher::new();
+        setup_fetcher(
+            &mut mock_fetcher,
+            "samples/debian/Release",
+            "samples/debian/Packages",
+        );
+        let mut destination: MemoryDestination = MemoryDestination::new("ubuntu");
+        forcing
+            .sync_repo_internal(Box::new(mock_fetcher), &mut destination, repo_config)
+            .unwrap();
+
+        let (contents, deletions, invalidations) = destination.explode();
+        assert_eq!(0, contents.len(), "force must not re-upload anything");
+        assert_eq!(0, deletions.len());
+        assert_eq!(1, invalidations.len());
+        assert!(invalidations.contains("ubuntu/dists/*"));
     }
 
     fn setup_fetcher(mock_fetcher: &mut MockFetcher, release: &str, packages: &str) {
@@ -1010,7 +1133,7 @@ pub mod tests {
         }
 
         let sync_manager =
-            SyncManager::new_internal(config.clone(), Lock::new(), Arc::new(mock), false);
+            SyncManager::new_internal(config.clone(), Lock::new(), Arc::new(mock), false, false);
 
         secs_offset.store(0, Ordering::SeqCst);
         {

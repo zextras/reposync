@@ -23,8 +23,8 @@ Operations are ordered to minimize the impact of interrupted syncs. As long as s
 1. Download source repository indexes and diff against the last known state.
 2. For each new or modified package: download, validate checksum, write to destination.
 3. Upload new indexes **after** all packages are written — every package referenced in the new index is already available.
-4. Invalidate modified paths in CloudFront cache (if configured).
-5. Delete old indexes and removed packages.
+4. Delete old indexes and removed packages.
+5. Invalidate the CloudFront cache (if configured), **last** — an invalidation only purges objects written before its `CreateTime`, so it has to follow every upload and delete of the run.
 6. Persist the new indexes locally for the next sync cycle.
 
 If any step fails (checksum mismatch, I/O error, etc.) the sync is aborted and local state is not updated — the next run starts from scratch.
@@ -68,9 +68,10 @@ USAGE:
     reposync [OPTIONS] <CONFIG_FILE> <ACTION>
 
 FLAGS:
-    -h, --help       Prints help information
-    -V, --version    Prints version information
-        --dry-run    Show what would be done without making any changes
+    -h, --help              Prints help information
+    -V, --version           Prints version information
+        --dry-run           Show what would be done without making any changes
+        --force-invalidate  Invalidate the CDN cache even when nothing changed
 
 OPTIONS:
         --repo <REPO>    Which repo to synchronize
@@ -194,6 +195,31 @@ repo:
 ### S3 and CloudFront endpoints
 
 See [S3 endpoints](https://docs.aws.amazon.com/general/latest/gr/s3.html) and [CloudFront endpoints](https://docs.aws.amazon.com/general/latest/gr/cf_region.html), or provide a custom URL for S3-compatible storage.
+
+### CloudFront cache invalidation
+
+When `cloudfront_distribution_id` is set, a sync that changed anything issues exactly one invalidation path: the repository index directory as a recursive wildcard, prefixed with the destination `path`.
+
+| Source kind | Invalidation path |
+|-------------|-------------------|
+| `debian`    | `/<path>/dists/*` |
+| `redhat`    | `/<path>/repodata/*` |
+
+One wildcard rather than a list of changed files, because:
+
+- **It covers first syncs.** A brand-new destination prefix has no replaced files, so a per-file list would be empty and nothing would be purged — even though a moving pointer (`/rc/...`, `/release-<range>/...`) resolving onto that prefix may already have cached a partially-synced state of it.
+- **It covers every cache variant.** With compression enabled CloudFront caches gzip and identity separately under the same key. A wildcard purges all of them; naming one file does not.
+- **It costs one billable path** instead of one per changed package.
+
+Package objects are not invalidated: their paths are version- or content-addressed, so a changed publish never reuses one, and an object dropped from the index is no longer reachable.
+
+If a publish's invalidation was missed, re-running the sync is a no-op because the diff is empty. Use `--force-invalidate` to re-issue the purge without needing a change at the origin:
+
+```
+$ reposync my-config.yaml sync --repo my-repo --force-invalidate
+nothing to synchronize, forcing cache invalidation
+invalidating repodata/*
+```
 
 ## License
 

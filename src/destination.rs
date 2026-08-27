@@ -166,6 +166,15 @@ impl S3Destination {
             format!("{}/{}", &self.path, path)
         }
     }
+
+    /// Absolute distribution path for a CloudFront invalidation entry.
+    ///
+    /// The CloudFront cache key is the URI after the viewer-request function
+    /// has rewritten it, which is the destination path — so prefixing the
+    /// repo-relative path with `path` yields exactly the key to purge.
+    fn invalidation_path(&self, path: &str) -> String {
+        format!("/{}", self.s3_path(path))
+    }
 }
 
 /// Helper: run an async future on the current thread using a one-shot tokio
@@ -258,10 +267,7 @@ impl Destination for S3Destination {
                 log::info!("invalidating {}", path);
             }
 
-            let items: Vec<String> = paths
-                .iter()
-                .map(|p| format!("/{}", self.s3_path(p)))
-                .collect();
+            let items: Vec<String> = paths.iter().map(|p| self.invalidation_path(p)).collect();
 
             let invalidation_paths = Paths::builder()
                 .quantity(paths.len() as i32)
@@ -394,5 +400,44 @@ impl Destination for MemoryDestination {
 
     fn name(&self) -> String {
         "memory".into()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::S3Destination;
+    use std::time::Duration;
+
+    fn destination(path: &str) -> S3Destination {
+        S3Destination::new(
+            path,
+            "https://s3.eu-west-1.amazonaws.com",
+            "zextras-public-repositories",
+            None,
+            None,
+            "eu-west-1",
+            "key",
+            "secret",
+            3,
+            Duration::from_secs(1),
+        )
+    }
+
+    /// The exact strings handed to CreateInvalidation. These are CloudFront
+    /// cache keys, so they must be absolute and carry the destination prefix.
+    #[test]
+    fn invalidation_paths_are_absolute_and_prefixed() {
+        assert_eq!(
+            "/bundles/26.6.1-rc5/rhel9/repodata/*",
+            destination("bundles/26.6.1-rc5/rhel9").invalidation_path("repodata/*")
+        );
+        assert_eq!(
+            "/release/ubuntu/dists/*",
+            destination("release/ubuntu").invalidation_path("dists/*")
+        );
+        assert_eq!(
+            "/repodata/*",
+            destination("").invalidation_path("repodata/*")
+        );
     }
 }
