@@ -31,7 +31,7 @@ If any step fails (checksum mismatch, I/O error, etc.) the sync is aborted and l
 
 ## Requirements
 
-- Rust >= 1.91 (aws-sdk crates requirement)
+- Rust >= 1.93.1, declared as `rust-version` in `Cargo.toml` and matching the CI `rust-v1` agent. With `resolver = "3"` this also caps dependency resolution, so `cargo update` cannot pull in a crate needing a newer rustc than CI has (the aws-sdk crates raise their MSRV often).
 - OpenSSL development headers (for building)
 
 ## Build
