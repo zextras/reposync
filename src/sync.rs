@@ -417,9 +417,13 @@ impl SyncManager {
             // prefix was brand new), leaving clients pinned to a stale index
             // until the TTL expires. --force-invalidate re-issues the purge
             // without needing a bucket change to hang it off.
-            if self.force_invalidate && !self.dry_run {
-                log::info!("nothing to synchronize, forcing cache invalidation");
-                destination.invalidate(vec![index_wildcard])?;
+            if self.force_invalidate {
+                if self.dry_run {
+                    log::info!("[dry-run] would invalidate {}", index_wildcard);
+                } else {
+                    log::info!("nothing to synchronize, forcing cache invalidation");
+                    destination.invalidate(vec![index_wildcard])?;
+                }
             }
             return Ok(());
         }
@@ -467,6 +471,7 @@ impl SyncManager {
             for op in &index_delete_list {
                 log::info!("  delete {}", op.path);
             }
+            log::info!("[dry-run] would invalidate {}", index_wildcard);
             log::info!("[dry-run] would update saved metadata");
             return Ok(());
         }
