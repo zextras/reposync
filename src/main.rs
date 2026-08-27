@@ -60,6 +60,13 @@ fn main() {
                 .long("dry-run")
                 .help("show what would be done without making any changes")
                 .action(clap::ArgAction::SetTrue),
+            Arg::new("force-invalidate")
+                .long("force-invalidate")
+                .help(
+                    "issue the CDN cache invalidation even when nothing changed, \
+                     to recover from a publish whose invalidation was missed",
+                )
+                .action(clap::ArgAction::SetTrue),
         ])
         .get_matches();
 
@@ -85,6 +92,7 @@ fn main() {
             exit(1);
         });
     let dry_run = matches.get_flag("dry-run");
+    let force_invalidate = matches.get_flag("force-invalidate");
     match action.as_str() {
         "check" => {
             log::info!("config file is correct");
@@ -97,7 +105,7 @@ fn main() {
                 } else {
                     vec![repo_name.clone()]
                 };
-                let sync_manager = SyncManager::new(config, dry_run);
+                let sync_manager = SyncManager::new(config, dry_run, force_invalidate);
                 for repo_name in repo_names {
                     let result = sync_manager.sync_repo(&repo_name);
                     if let Err(err) = result {
@@ -118,7 +126,7 @@ fn main() {
         }
         "server" => {
             let addr = config.general.bind_address.clone();
-            start_server(&addr, SyncManager::new(config, false));
+            start_server(&addr, SyncManager::new(config, false, false));
         }
         _ => {
             panic!("unknown action {}", action);
