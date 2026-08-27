@@ -33,7 +33,7 @@ lint: fmt-check clippy ## Run all linters (format check + clippy)
 
 ## Docker
 
-docker-build: ## Build Docker image
+docker-build: release ## Build Docker image (compiles the binary first; the image only packages it)
 	docker build -f deployment/Dockerfile -t $(IMAGE):$(TAG) .
 
 docker-build-latest: docker-build ## Build and tag as latest

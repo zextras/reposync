@@ -56,7 +56,12 @@ cargo build --release
 make docker-build
 ```
 
-Uses a multi-stage Alpine build (`deployment/Dockerfile`). The final image contains only the static binary, `ca-certificates`, `libgcc`, and `openssl`.
+`deployment/Dockerfile` only packages an already-built binary onto
+`debian:trixie-slim` with `ca-certificates`; OpenSSL is vendored into the
+binary, so no TLS library is installed. It compiles nothing, so
+`cargo build --release` must run first — `make docker-build` does that for you.
+In CI the binary comes from the pipeline's `Build` stage via the shared pod
+workspace.
 
 ## Usage
 

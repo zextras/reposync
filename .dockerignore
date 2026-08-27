@@ -1,5 +1,11 @@
-# Build artifacts
-target/
+# Build artifacts. The release binary is the one thing the image needs: it is
+# built by CI's `Build` stage and copied in, not compiled during the image
+# build. Exclusions are written per-level because a negation cannot re-include
+# a path underneath an excluded directory.
+target/*
+!target/release
+target/release/*
+!target/release/reposync
 
 # Git
 .git/
