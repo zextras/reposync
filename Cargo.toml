@@ -1,6 +1,6 @@
 [package]
 name = "reposync"
-version = "0.13.0"
+version = "0.13.1"
 authors = ["Davide Baldo <davide.baldo@zextras.com>"]
 edition = "2021"
 # Minimum supported Rust, matching the CI `rust-v1` agent. Enforced during
