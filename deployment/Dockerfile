@@ -23,7 +23,7 @@ LABEL maintainer="Golden Beatles <goldenbeatles@zextras.com>"
 LABEL description="Reposync image"
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates vi \
+    && apt-get install -y --no-install-recommends ca-certificates vim-tiny \
     && rm -rf /var/lib/apt/lists/*
 
 # Built for linux/amd64. dockerStage() is not passed `platforms`, so it builds
